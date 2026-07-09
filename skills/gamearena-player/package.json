@@ -1,0 +1,24 @@
+{
+  "name": "@goodagent/skill-gamearena-player",
+  "version": "1.0.0",
+  "description": "GoodAgent skill: play 1v1 G$ wagers against MARKOV on GameArena (Celo)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "viem": "^2.31.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

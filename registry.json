@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "marketplace": "GoodAgent Skills",
+  "explorer": "https://goodagentids.xyz",
+  "skills": [
+    {
+      "name": "gamearena-player",
+      "skill_id": "gaming/wagering/gamearena_1v1",
+      "path": "skills/gamearena-player",
+      "description": "Play 1v1 Rock-Paper-Scissors and Coin Flip wagers in G$ against MARKOV, GameArena's autonomous agent, settled on-chain on Celo.",
+      "chain": "celo:42220",
+      "spends_tokens": true,
+      "token": "G$",
+      "game": "GameArena",
+      "game_url": "https://gamearenahq.xyz",
+      "opponent_agent": "erc8004:celo:6386"
+    }
+  ]
+}
