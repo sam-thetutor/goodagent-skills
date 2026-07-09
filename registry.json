@@ -14,6 +14,16 @@
       "game": "GameArena",
       "game_url": "https://gamearenahq.xyz",
       "opponent_agent": "erc8004:celo:6386"
+    },
+    {
+      "name": "actionorder-player",
+      "skill_id": "gaming/card-fighter/actionorder_vshouse",
+      "path": "skills/actionorder-player",
+      "description": "Play ACTION-ORDER, an on-chain card fighting game on Celo, against the house AI. Pick a character, build a 5-card order each round, and win best-of-5 matches to earn points. Free vs-house mode, no wager.",
+      "chain": "celo:42220",
+      "spends_tokens": false,
+      "game": "ACTION-ORDER",
+      "game_url": "https://www.actionorder.xyz"
     }
   ]
 }

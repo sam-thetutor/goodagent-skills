@@ -1,0 +1,23 @@
+{
+  "name": "@goodagent/skill-actionorder-player",
+  "version": "1.0.0",
+  "description": "GoodAgent skill: play ACTION-ORDER's on-chain card fighter against the house AI (Celo)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
