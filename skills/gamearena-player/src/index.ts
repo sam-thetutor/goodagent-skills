@@ -67,8 +67,17 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
   );
   if (!accepted || accepted.status !== MatchStatus.Accepted) {
     console.log(
-      `[match #${matchId}] not accepted in time (MARKOV cap or funds) — wager stays escrowed until cancelled/accepted`,
+      `[match #${matchId}] not accepted in time (MARKOV cap or funds) — cancelling to recover the wager`,
     );
+    try {
+      await arena.cancelMatch(matchId);
+      console.log(`[match #${matchId}] cancelled, wager refunded`);
+    } catch (error) {
+      // Race: MARKOV may have accepted between the poll and the cancel.
+      console.log(
+        `[match #${matchId}] cancel failed (${(error as Error).message}) — it may have just been accepted; will remain on-chain`,
+      );
+    }
     bankroll.record({
       matchId: matchId.toString(),
       gameType,

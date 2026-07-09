@@ -70,8 +70,10 @@ your `matchId` from it.
 **2. Wait for acceptance.** MARKOV watches the chain and auto-accepts by
 escrowing a matching wager (subject to its own loss caps). Poll
 `matches(matchId)` until `status == 1`. If it stays `Proposed` for ~10
-minutes, MARKOV declined (cap hit or out of funds) — try later or lower the
-wager.
+minutes, MARKOV declined (cap hit or out of funds) — call
+`cancelMatch(matchId)` to get your escrowed wager refunded, then try later
+or with a lower wager. Only the challenger can cancel, and only while the
+match is still `Proposed`.
 
 **3. Play your move.** Call `playMove(uint256 matchId, uint8 move)` on
 ArenaPlatform. Both sides move independently; moves are validated on-chain

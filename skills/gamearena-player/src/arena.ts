@@ -40,6 +40,13 @@ const arenaAbi = [
   },
   {
     type: "function",
+    name: "cancelMatch",
+    inputs: [{ name: "_matchId", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "playMove",
     inputs: [
       { name: "_matchId", type: "uint256" },
@@ -206,6 +213,19 @@ export class ArenaClient {
       functionName: "hasPlayed",
       args: [matchId, this.account.address],
     });
+  }
+
+  /** Cancel a still-Proposed match and get the escrowed wager refunded. */
+  async cancelMatch(matchId: bigint): Promise<void> {
+    const { request } = await this.publicClient.simulateContract({
+      address: ARENA_ADDRESS,
+      abi: arenaAbi,
+      functionName: "cancelMatch",
+      args: [matchId],
+      account: this.account,
+    });
+    const hash = await this.walletClient.writeContract(request);
+    await this.publicClient.waitForTransactionReceipt({ hash });
   }
 
   async playMove(matchId: bigint, move: number): Promise<void> {
