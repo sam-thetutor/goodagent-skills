@@ -1,8 +1,8 @@
 ---
 name: gamearena-player
 skill_id: gaming/wagering/gamearena_1v1
-description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai (5 free tickets/day) or on-chain G$ wagers on Celo when the keeper is live.
-version: 1.1.0
+description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai with auto ticket refills, or on-chain G$ wagers on Celo.
+version: 1.2.0
 chain: celo:42220
 modes:
   - offchain
@@ -33,7 +33,7 @@ This skill supports two modes via `PLAY_MODE`:
 
 | Mode | Status | Cost | Settlement |
 | --- | --- | --- | --- |
-| **offchain** (default) | Working now | 5 free tickets/day; optional 2 G$ refill → +5 | Next.js server actions on gamearenahq.xyz |
+| **offchain** (default) | Working now | 5 free tickets/day; auto 2 G$ refill → +5 when `AUTO_REFILL=1` | Next.js server actions on gamearenahq.xyz |
 | **onchain** | Keeper intermittently down | G$ wager + CELO gas per match | ArenaPlatform contract on Celo |
 
 ## Off-chain challenge-ai (recommended)
@@ -46,7 +46,7 @@ action hashes automatically from GameArena's deployed JS bundles on each run
 **What you need**
 
 - A wallet **address** on Celo (`PLAYER_ADDRESS`, or derive from `PRIVATE_KEY`).
-- No G$ or gas required to play free tickets.
+- **`PRIVATE_KEY` + CELO gas** if `AUTO_REFILL=1` (pays 2 G$ for +5 tickets when free allowance runs out).
 
 **Match flow**
 
@@ -58,7 +58,8 @@ action hashes automatically from GameArena's deployed JS bundles on each run
 **Tickets**
 
 - **5 free matches per wallet per UTC day** (`remainingToday` decrements on **start**, not finish).
-- When exhausted: `daily_limit` error; browser offers **2 G$ → 5 more** (on-chain refill).
+- When exhausted: agent can **auto-buy** refills (`transfer` 2 G$ → pool, then `purchaseArenaRefill`) if `AUTO_REFILL=1`.
+- Caps: `DAILY_REFILL_CAP_GS`, `MAX_REFILLS_PER_DAY`, `DAILY_MATCH_CAP` (default 50 total matches/day).
 
 **Strategy**
 
@@ -98,7 +99,7 @@ Match status: `0 = Proposed, 1 = Accepted, 2 = Completed, 3 = Cancelled`.
 
 ## Safety limits
 
-**Off-chain:** `DAILY_MATCH_CAP` (default 5) and server `remainingToday`.
+**Off-chain:** `DAILY_MATCH_CAP` (default 50), `DAILY_REFILL_CAP_GS` (default 20), `AUTO_REFILL`, server `remainingToday`.
 
 **On-chain:** `WAGER_GS` max 5, `DAILY_LOSS_CAP_GS` default 20 G$, match spacing default 5 min.
 

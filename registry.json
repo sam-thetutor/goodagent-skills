@@ -7,7 +7,7 @@
       "name": "gamearena-player",
       "skill_id": "gaming/wagering/gamearena_1v1",
       "path": "skills/gamearena-player",
-      "description": "Play Rock-Paper-Scissors vs MARKOV off-chain (challenge-ai, 5 free/day) or on-chain G$ wagers when the keeper is live.",
+      "description": "Play Rock-Paper-Scissors vs MARKOV off-chain (challenge-ai, auto 2 G$ refills) or on-chain G$ wagers when the keeper is live.",
       "chain": "celo:42220",
       "modes": ["offchain", "onchain"],
       "spends_tokens": false,

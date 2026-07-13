@@ -11,10 +11,19 @@ export interface MatchRecord {
   at: string;
 }
 
+export interface RefillRecord {
+  priceGs: number;
+  txHash: string;
+  at: string;
+}
+
 interface State {
   day: string;
   lostTodayGs: number;
   matchesToday: number;
+  refillsToday: number;
+  spentOnRefillsTodayGs: number;
+  refillHistory: RefillRecord[];
   history: MatchRecord[];
 }
 
@@ -24,7 +33,7 @@ function today(): string {
 
 /**
  * File-backed daily limits. On-chain mode tracks G$ lost; off-chain tracks
- * match count against the server ticket allowance.
+ * match count and optional refill spend caps.
  */
 export class Bankroll {
   private state: State;
@@ -33,11 +42,23 @@ export class Bankroll {
     private file: string,
     private mode: PlayMode,
     private dailyLossCapGs: number,
+    /** 0 = unlimited matches per UTC day */
     private dailyMatchCap: number,
+    private dailyRefillCapGs: number,
+    private maxRefillsPerDay: number,
   ) {
-    this.state = existsSync(file)
-      ? (JSON.parse(readFileSync(file, "utf8")) as State)
-      : { day: today(), lostTodayGs: 0, matchesToday: 0, history: [] };
+    const raw = existsSync(file)
+      ? (JSON.parse(readFileSync(file, "utf8")) as Partial<State>)
+      : {};
+    this.state = {
+      day: raw.day ?? today(),
+      lostTodayGs: raw.lostTodayGs ?? 0,
+      matchesToday: raw.matchesToday ?? 0,
+      refillsToday: raw.refillsToday ?? 0,
+      spentOnRefillsTodayGs: raw.spentOnRefillsTodayGs ?? 0,
+      refillHistory: raw.refillHistory ?? [],
+      history: raw.history ?? [],
+    };
     this.rollover();
     this.migrateLegacyRecords();
   }
@@ -53,13 +74,20 @@ export class Bankroll {
       this.state.day = today();
       this.state.lostTodayGs = 0;
       this.state.matchesToday = 0;
+      this.state.refillsToday = 0;
+      this.state.spentOnRefillsTodayGs = 0;
+      this.state.refillHistory = [];
     }
+  }
+
+  private persist(): void {
+    writeFileSync(this.file, JSON.stringify(this.state, null, 2));
   }
 
   canPlay(wagerGs: number): { ok: boolean; reason?: string } {
     this.rollover();
     if (this.mode === "offchain") {
-      if (this.state.matchesToday >= this.dailyMatchCap) {
+      if (this.dailyMatchCap > 0 && this.state.matchesToday >= this.dailyMatchCap) {
         return {
           ok: false,
           reason: `daily match cap: played ${this.state.matchesToday} of ${this.dailyMatchCap} matches today`,
@@ -76,6 +104,38 @@ export class Bankroll {
     return { ok: true };
   }
 
+  canBuyRefill(priceGs: number): { ok: boolean; reason?: string } {
+    this.rollover();
+    if (this.maxRefillsPerDay > 0 && this.state.refillsToday >= this.maxRefillsPerDay) {
+      return {
+        ok: false,
+        reason: `refill cap: bought ${this.state.refillsToday} of ${this.maxRefillsPerDay} refills today`,
+      };
+    }
+    if (
+      this.dailyRefillCapGs > 0 &&
+      this.state.spentOnRefillsTodayGs + priceGs > this.dailyRefillCapGs
+    ) {
+      return {
+        ok: false,
+        reason: `refill spend cap: spent ${this.state.spentOnRefillsTodayGs} G$ of ${this.dailyRefillCapGs} G$ refill budget`,
+      };
+    }
+    return { ok: true };
+  }
+
+  recordRefill(priceGs: number, txHash: string): void {
+    this.rollover();
+    this.state.refillsToday += 1;
+    this.state.spentOnRefillsTodayGs += priceGs;
+    this.state.refillHistory.push({
+      priceGs,
+      txHash,
+      at: new Date().toISOString(),
+    });
+    this.persist();
+  }
+
   record(rec: MatchRecord): void {
     this.rollover();
     this.state.matchesToday += 1;
@@ -83,14 +143,20 @@ export class Bankroll {
       this.state.lostTodayGs += rec.wagerGs;
     }
     this.state.history.push(rec);
-    writeFileSync(this.file, JSON.stringify(this.state, null, 2));
+    this.persist();
   }
 
   get summary(): string {
     const wins = this.state.history.filter((h) => h.result === "won").length;
     const losses = this.state.history.filter((h) => h.result === "lost").length;
     if (this.mode === "offchain") {
-      return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday}/${this.dailyMatchCap} matches`;
+      const cap =
+        this.dailyMatchCap > 0 ? `/${this.dailyMatchCap}` : "";
+      const refill =
+        this.state.refillsToday > 0
+          ? ` · refills ${this.state.refillsToday} (${this.state.spentOnRefillsTodayGs} G$)`
+          : "";
+      return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday}${cap} matches${refill}`;
     }
     return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday} matches, ${this.state.lostTodayGs} G$ lost`;
   }

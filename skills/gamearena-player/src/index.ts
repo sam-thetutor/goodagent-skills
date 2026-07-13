@@ -7,12 +7,23 @@ import {
   MatchStatus,
 } from "./arena.js";
 import { Bankroll, type PlayMode } from "./bankroll.js";
-import { ChallengeAiClient } from "./challenge-ai.js";
+import {
+  ChallengeAiClient,
+  type RefillOffer,
+  type StartMatchResult,
+} from "./challenge-ai.js";
+import { readGsBalance, sendRefillPayment } from "./refill.js";
 import { GAME_NAMES, pickMove } from "./strategy.js";
 
 loadEnv();
 
 const MAX_WAGER_GS = 5;
+
+function envFlag(name: string, defaultOn = true): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return defaultOn;
+  return raw === "1" || raw === "true" || raw === "yes";
+}
 
 function resolvePlayMode(): PlayMode {
   const mode = (process.env.PLAY_MODE ?? "offchain").toLowerCase();
@@ -50,7 +61,10 @@ const challengeAiUrl =
 const wagerGs = Math.min(Number(process.env.WAGER_GS ?? 1), MAX_WAGER_GS);
 const gameType = Number(process.env.GAME_TYPE ?? 0);
 const lossCapGs = Number(process.env.DAILY_LOSS_CAP_GS ?? 20);
-const dailyMatchCap = Number(process.env.DAILY_MATCH_CAP ?? 5);
+const dailyMatchCap = Number(process.env.DAILY_MATCH_CAP ?? 50);
+const dailyRefillCapGs = Number(process.env.DAILY_REFILL_CAP_GS ?? 20);
+const maxRefillsPerDay = Number(process.env.MAX_REFILLS_PER_DAY ?? 10);
+const autoRefill = envFlag("AUTO_REFILL", true);
 const maxMatches = Number(process.env.MAX_MATCHES ?? 10);
 const intervalMs =
   Math.max(30, Number(process.env.MATCH_INTERVAL_SECONDS ?? 300)) * 1000;
@@ -70,10 +84,119 @@ const bankroll = new Bankroll(
   playMode,
   lossCapGs,
   dailyMatchCap,
+  dailyRefillCapGs,
+  maxRefillsPerDay,
 );
 
 const ACCEPT_TIMEOUT_MS = 10 * 60 * 1000;
 const RESOLVE_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function tryAutoRefill(
+  client: ChallengeAiClient,
+  offer?: RefillOffer,
+): Promise<boolean> {
+  if (!autoRefill) {
+    console.log("[refill] skip — AUTO_REFILL disabled");
+    return false;
+  }
+  if (!privateKey) {
+    console.log("[refill] skip — PRIVATE_KEY required to pay for ticket refills");
+    return false;
+  }
+  if (!offer) {
+    console.log("[refill] skip — no refill offer from GameArena");
+    return false;
+  }
+
+  const gate = bankroll.canBuyRefill(offer.priceGs);
+  if (!gate.ok) {
+    console.log(`[refill] skip — ${gate.reason}`);
+    return false;
+  }
+
+  try {
+    const balance = await readGsBalance(playerAddress, rpcUrl, offer.gToken);
+    const need = BigInt(offer.priceGs) * 10n ** 18n;
+    if (balance < need) {
+      console.log(
+        `[refill] skip — G$ balance ${formatEther(balance)} < ${offer.priceGs} G$ needed`,
+      );
+      return false;
+    }
+
+    console.log(
+      `[refill] paying ${offer.priceGs} G$ → +${offer.grants} tickets (pool ${offer.poolWallet.slice(0, 10)}…)`,
+    );
+    const txHash = await sendRefillPayment(privateKey, rpcUrl, offer);
+    console.log(`[refill] tx ${txHash}`);
+
+    let credited = await client.purchaseRefill(playerAddress, txHash);
+    if (!credited.ok) {
+      console.log("[refill] waiting for server to index payment…");
+      await new Promise((r) => setTimeout(r, 4000));
+      credited = await client.purchaseRefill(playerAddress, txHash);
+    }
+
+    if (!credited.ok) {
+      console.log(
+        `[refill] payment sent but not credited yet (${credited.error ?? "unknown"}) — tx ${txHash}`,
+      );
+      return false;
+    }
+
+    bankroll.recordRefill(offer.priceGs, txHash);
+    console.log(
+      `[refill] credited · ${credited.remaining ?? "?"} tickets left today`,
+    );
+    return true;
+  } catch (error) {
+    console.log(`[refill] failed — ${(error as Error).message}`);
+    return false;
+  }
+}
+
+async function resolveOffchainStart(
+  client: ChallengeAiClient,
+): Promise<StartMatchResult | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ladder = await client.getLadder(playerAddress);
+    if (
+      typeof ladder.remainingToday === "number" &&
+      ladder.remainingToday <= 0
+    ) {
+      const probe = await client.startMatch(playerAddress);
+      if (probe.error === "daily_limit" && probe.refill) {
+        const refilled = await tryAutoRefill(client, probe.refill);
+        if (!refilled) return null;
+        continue;
+      }
+      console.log(
+        "[skip] no challenge-ai tickets left today (remainingToday=0)",
+      );
+      return null;
+    }
+
+    console.log(`[start] Rock-Paper-Scissors vs MARKOV (off-chain)…`);
+    const started = await client.startMatch(playerAddress);
+
+    if (started.error === "daily_limit") {
+      const refilled = await tryAutoRefill(client, started.refill);
+      if (!refilled) return null;
+      continue;
+    }
+
+    if (started.error || !started.matchId) {
+      console.log(
+        `[skip] could not start match: ${started.error ?? "unknown error"}`,
+      );
+      return null;
+    }
+
+    return started;
+  }
+
+  return null;
+}
 
 async function playOffchainMatch(
   client: ChallengeAiClient,
@@ -84,28 +207,8 @@ async function playOffchainMatch(
     return "skipped";
   }
 
-  const ladder = await client.getLadder(playerAddress);
-  if (typeof ladder.remainingToday === "number" && ladder.remainingToday <= 0) {
-    console.log(
-      "[skip] no challenge-ai tickets left today (remainingToday=0). Buy a refill in the browser or wait for daily reset.",
-    );
-    return "skipped";
-  }
-
-  console.log(`[start] Rock-Paper-Scissors vs MARKOV (off-chain)…`);
-  const started = await client.startMatch(playerAddress);
-
-  if (started.error === "daily_limit") {
-    console.log(
-      `[skip] daily_limit — server tickets exhausted${started.refill ? ` (refill: ${started.refill.priceGs} G$ → ${started.refill.grants} matches)` : ""}`,
-    );
-    return "skipped";
-  }
-
-  if (started.error || !started.matchId) {
-    console.log(`[skip] could not start match: ${started.error ?? "unknown error"}`);
-    return "skipped";
-  }
+  const started = await resolveOffchainStart(client);
+  if (!started?.matchId) return "skipped";
 
   const { matchId, remainingToday, commitHash } = started;
   console.log(
@@ -246,12 +349,13 @@ async function main(): Promise<void> {
   );
 
   if (playMode === "offchain") {
+    const matchCapLabel = dailyMatchCap > 0 ? `${dailyMatchCap}/day` : "∞/day";
     console.log(
-      `game=RPS tickets≤${dailyMatchCap}/day maxMatches=${maxMatches || "∞"}`,
+      `game=RPS tickets≤${matchCapLabel} autoRefill=${autoRefill} refillBudget=${dailyRefillCapGs}G$/day maxMatches=${maxMatches || "∞"}`,
     );
     const client = await ChallengeAiClient.create(challengeAiUrl);
     console.log(
-      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}…`,
+      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}… refill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`,
     );
 
     let played = 0;

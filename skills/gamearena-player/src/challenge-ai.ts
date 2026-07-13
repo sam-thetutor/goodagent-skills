@@ -13,6 +13,8 @@ export type ChallengeActionName = (typeof CHALLENGE_ACTIONS)[number];
 const REQUIRED_ACTIONS: ChallengeActionName[] = [
   "startArenaMatch",
   "throwArenaMove",
+  "getArenaLadder",
+  "purchaseArenaRefill",
 ];
 
 export class ChallengeAiStaleActionsError extends Error {
@@ -50,6 +52,16 @@ export interface ThrowMoveResult {
   error?: string;
 }
 
+export interface RefillOffer {
+  sku: string;
+  priceGs: number;
+  grants: number;
+  poolWallet: Address;
+  gToken: Address;
+  relayer?: Address;
+  permitNonce?: string;
+}
+
 export interface StartMatchResult {
   matchId?: string;
   commitHash?: string;
@@ -57,15 +69,13 @@ export interface StartMatchResult {
   winsNeeded?: number;
   remainingToday?: number;
   error?: string;
-  refill?: {
-    sku: string;
-    priceGs: number;
-    grants: number;
-    poolWallet: Address;
-    gToken: Address;
-    relayer?: Address;
-    permitNonce?: string;
-  };
+  refill?: RefillOffer;
+}
+
+export interface PurchaseRefillResult {
+  ok?: boolean;
+  remaining?: number;
+  error?: string;
 }
 
 export interface LadderResult {
@@ -140,6 +150,16 @@ export class ChallengeAiClient {
 
   async throwMove(matchId: string, move: number): Promise<ThrowMoveResult> {
     return this.call<ThrowMoveResult>("throwArenaMove", [matchId, move]);
+  }
+
+  async purchaseRefill(
+    playerAddress: Address,
+    txHash: string,
+  ): Promise<PurchaseRefillResult> {
+    return this.call<PurchaseRefillResult>("purchaseArenaRefill", [
+      playerAddress,
+      txHash,
+    ]);
   }
 
   private async call<T>(action: ChallengeActionName, body: unknown[]): Promise<T> {
