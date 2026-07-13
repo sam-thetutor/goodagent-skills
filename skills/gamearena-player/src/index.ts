@@ -1,43 +1,157 @@
-import { formatEther, type Hex } from "viem";
+import { formatEther, type Address, type Hex, isAddress } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { config as loadEnv } from "dotenv";
 import {
   ArenaClient,
   MARKOV_ADDRESS,
   MatchStatus,
 } from "./arena.js";
-import { Bankroll } from "./bankroll.js";
+import { Bankroll, type PlayMode } from "./bankroll.js";
+import { ChallengeAiClient } from "./challenge-ai.js";
 import { GAME_NAMES, pickMove } from "./strategy.js";
 
 loadEnv();
 
-const MAX_WAGER_GS = 5; // hard cap from SKILL.md — do not raise
+const MAX_WAGER_GS = 5;
 
-const privateKey = process.env.PRIVATE_KEY as Hex | undefined;
-if (!privateKey) {
-  console.error("PRIVATE_KEY is not set. Copy .env.example to .env first.");
+function resolvePlayMode(): PlayMode {
+  const mode = (process.env.PLAY_MODE ?? "offchain").toLowerCase();
+  if (mode === "onchain" || mode === "offchain") return mode;
+  console.error('PLAY_MODE must be "offchain" or "onchain"');
   process.exit(1);
 }
 
+function resolvePlayerAddress(privateKey?: Hex): Address {
+  const fromEnv = process.env.PLAYER_ADDRESS?.trim();
+  if (fromEnv) {
+    if (!isAddress(fromEnv)) {
+      console.error("PLAYER_ADDRESS is not a valid address");
+      process.exit(1);
+    }
+    return fromEnv;
+  }
+  if (privateKey) return privateKeyToAccount(privateKey).address;
+  console.error("Set PLAYER_ADDRESS or PRIVATE_KEY");
+  process.exit(1);
+}
+
+const playMode = resolvePlayMode();
+const privateKey = process.env.PRIVATE_KEY?.trim() as Hex | undefined;
+
+if (playMode === "onchain" && !privateKey) {
+  console.error("PRIVATE_KEY is required for on-chain play. Copy .env.example to .env");
+  process.exit(1);
+}
+
+const playerAddress = resolvePlayerAddress(privateKey);
 const rpcUrl = process.env.CELO_RPC_URL ?? "https://forno.celo.org";
+const challengeAiUrl =
+  process.env.CHALLENGE_AI_URL ?? "https://gamearenahq.xyz";
 const wagerGs = Math.min(Number(process.env.WAGER_GS ?? 1), MAX_WAGER_GS);
 const gameType = Number(process.env.GAME_TYPE ?? 0);
 const lossCapGs = Number(process.env.DAILY_LOSS_CAP_GS ?? 20);
+const dailyMatchCap = Number(process.env.DAILY_MATCH_CAP ?? 5);
 const maxMatches = Number(process.env.MAX_MATCHES ?? 10);
 const intervalMs =
   Math.max(30, Number(process.env.MATCH_INTERVAL_SECONDS ?? 300)) * 1000;
+
+if (playMode === "offchain" && gameType !== 0) {
+  console.error("Off-chain challenge-ai only supports GAME_TYPE=0 (Rock-Paper-Scissors)");
+  process.exit(1);
+}
 
 if (!(gameType in GAME_NAMES)) {
   console.error(`GAME_TYPE must be one of: ${Object.keys(GAME_NAMES).join(", ")}`);
   process.exit(1);
 }
 
-const arena = new ArenaClient(privateKey, rpcUrl);
-const bankroll = new Bankroll("state.json", lossCapGs);
+const bankroll = new Bankroll(
+  "state.json",
+  playMode,
+  lossCapGs,
+  dailyMatchCap,
+);
 
 const ACCEPT_TIMEOUT_MS = 10 * 60 * 1000;
 const RESOLVE_TIMEOUT_MS = 15 * 60 * 1000;
 
-async function playOneMatch(): Promise<"played" | "skipped"> {
+async function playOffchainMatch(
+  client: ChallengeAiClient,
+): Promise<"played" | "skipped"> {
+  const gate = bankroll.canPlay(0);
+  if (!gate.ok) {
+    console.log(`[skip] ${gate.reason}`);
+    return "skipped";
+  }
+
+  const ladder = await client.getLadder(playerAddress);
+  if (typeof ladder.remainingToday === "number" && ladder.remainingToday <= 0) {
+    console.log(
+      "[skip] no challenge-ai tickets left today (remainingToday=0). Buy a refill in the browser or wait for daily reset.",
+    );
+    return "skipped";
+  }
+
+  console.log(`[start] Rock-Paper-Scissors vs MARKOV (off-chain)…`);
+  const started = await client.startMatch(playerAddress);
+
+  if (started.error === "daily_limit") {
+    console.log(
+      `[skip] daily_limit — server tickets exhausted${started.refill ? ` (refill: ${started.refill.priceGs} G$ → ${started.refill.grants} matches)` : ""}`,
+    );
+    return "skipped";
+  }
+
+  if (started.error || !started.matchId) {
+    console.log(`[skip] could not start match: ${started.error ?? "unknown error"}`);
+    return "skipped";
+  }
+
+  const { matchId, remainingToday, commitHash } = started;
+  console.log(
+    `[start] match ${matchId} · commit ${commitHash?.slice(0, 10)}… · tickets left ${remainingToday ?? "?"}`,
+  );
+
+  let finalOutcome: "won" | "lost" | "unresolved" = "unresolved";
+
+  while (true) {
+    const { move, label } = pickMove(0);
+    const round = await client.throwMove(matchId, move);
+
+    if (round.error) {
+      console.log(`[match ${matchId}] throw error: ${round.error}`);
+      break;
+    }
+
+    console.log(
+      `[match ${matchId}] r${round.round}: ${label} vs move ${round.aiMove} → ${round.result}` +
+        (round.called ? " (called)" : "") +
+        (round.markovLine ? ` — "${round.markovLine}"` : ""),
+    );
+
+    if (round.final) {
+      const won = round.final.outcome === "player_won";
+      finalOutcome = won ? "won" : "lost";
+      console.log(
+        `[match ${matchId}] ${won ? "WON" : "LOST"} in ${round.final.totalRounds} rounds` +
+          (round.final.matchLine ? ` — "${round.final.matchLine}"` : ""),
+      );
+      break;
+    }
+  }
+
+  bankroll.record({
+    matchId,
+    gameType: 0,
+    wagerGs: 0,
+    result: finalOutcome,
+    mode: "offchain",
+    at: new Date().toISOString(),
+  });
+  return "played";
+}
+
+async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped"> {
   const gate = bankroll.canPlay(wagerGs);
   if (!gate.ok) {
     console.log(`[skip] ${gate.reason}`);
@@ -73,7 +187,6 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
       await arena.cancelMatch(matchId);
       console.log(`[match #${matchId}] cancelled, wager refunded`);
     } catch (error) {
-      // Race: MARKOV may have accepted between the poll and the cancel.
       console.log(
         `[match #${matchId}] cancel failed (${(error as Error).message}) — it may have just been accepted; will remain on-chain`,
       );
@@ -83,6 +196,7 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
       gameType,
       wagerGs,
       result: "unresolved",
+      mode: "onchain",
       at: new Date().toISOString(),
     });
     return "played";
@@ -104,6 +218,7 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
       gameType,
       wagerGs,
       result: "unresolved",
+      mode: "onchain",
       at: new Date().toISOString(),
     });
     return "played";
@@ -119,29 +234,67 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
     gameType,
     wagerGs,
     result: won ? "won" : "lost",
+    mode: "onchain",
     at: new Date().toISOString(),
   });
   return "played";
 }
 
-console.log(`GameArena player skill — agent wallet ${arena.account.address}`);
-console.log(
-  `game=${GAME_NAMES[gameType]} wager=${wagerGs}G$ lossCap=${lossCapGs}G$ maxMatches=${maxMatches || "∞"}`,
-);
+async function main(): Promise<void> {
+  console.log(
+    `GameArena player — ${playMode} mode · wallet ${playerAddress}`,
+  );
 
-let played = 0;
-while (maxMatches === 0 || played < maxMatches) {
-  try {
-    const outcome = await playOneMatch();
-    if (outcome === "skipped") break;
-    played += 1;
-    console.log(`[bankroll] ${bankroll.summary}`);
-  } catch (error) {
-    console.error("[error]", (error as Error).message);
+  if (playMode === "offchain") {
+    console.log(
+      `game=RPS tickets≤${dailyMatchCap}/day maxMatches=${maxMatches || "∞"}`,
+    );
+    const client = await ChallengeAiClient.create(challengeAiUrl);
+    console.log(
+      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}…`,
+    );
+
+    let played = 0;
+    while (maxMatches === 0 || played < maxMatches) {
+      try {
+        const outcome = await playOffchainMatch(client);
+        if (outcome === "skipped") break;
+        played += 1;
+        console.log(`[bankroll] ${bankroll.summary}`);
+      } catch (error) {
+        console.error("[error]", (error as Error).message);
+        break;
+      }
+      if (maxMatches === 0 || played < maxMatches) {
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+  } else {
+    const arena = new ArenaClient(privateKey!, rpcUrl);
+    console.log(
+      `game=${GAME_NAMES[gameType]} wager=${wagerGs}G$ lossCap=${lossCapGs}G$ maxMatches=${maxMatches || "∞"}`,
+    );
+
+    let played = 0;
+    while (maxMatches === 0 || played < maxMatches) {
+      try {
+        const outcome = await playOnchainMatch(arena);
+        if (outcome === "skipped") break;
+        played += 1;
+        console.log(`[bankroll] ${bankroll.summary}`);
+      } catch (error) {
+        console.error("[error]", (error as Error).message);
+      }
+      if (maxMatches === 0 || played < maxMatches) {
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
   }
-  if (maxMatches === 0 || played < maxMatches) {
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
+
+  console.log(`Done. ${bankroll.summary}`);
 }
 
-console.log(`Done. ${bankroll.summary}`);
+main().catch((error) => {
+  console.error("[fatal]", (error as Error).message);
+  process.exit(1);
+});

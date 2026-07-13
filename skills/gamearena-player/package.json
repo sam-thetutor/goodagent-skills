@@ -1,7 +1,7 @@
 {
   "name": "@goodagent/skill-gamearena-player",
-  "version": "1.0.0",
-  "description": "GoodAgent skill: play 1v1 G$ wagers against MARKOV on GameArena (Celo)",
+  "version": "1.1.0",
+  "description": "GoodAgent skill: play RPS vs MARKOV on GameArena (off-chain challenge-ai or on-chain G$ wagers)",
   "private": true,
   "type": "module",
   "scripts": {

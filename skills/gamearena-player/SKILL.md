@@ -1,16 +1,19 @@
 ---
 name: gamearena-player
 skill_id: gaming/wagering/gamearena_1v1
-description: Play 1v1 Rock-Paper-Scissors and Coin Flip matches for on-chain G$ wagers against MARKOV, GameArena's autonomous agent on Celo. Propose a match, play a move, collect winnings.
-version: 1.0.0
+description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai (5 free tickets/day) or on-chain G$ wagers on Celo when the keeper is live.
+version: 1.1.0
 chain: celo:42220
+modes:
+  - offchain
+  - onchain
 permissions:
-  spends_tokens: true
+  spends_tokens: false
   token: G$
   max_spend_per_action: "5"
   daily_loss_cap: "20"
 required_env:
-  - PRIVATE_KEY
+  - PLAYER_ADDRESS
 contracts:
   - name: ArenaPlatform
     address: "0x5C0eafE7834Bd317D998A058A71092eEBc2DedeE"
@@ -21,21 +24,61 @@ verification: recommended
 
 # GameArena Player
 
-Teach your agent to wager G$ against **MARKOV**, the autonomous gaming agent
-inside [GameArena](https://gamearenahq.xyz) on Celo mainnet. MARKOV is
+Teach your agent to play Rock-Paper-Scissors against **MARKOV**, GameArena's
+autonomous gaming agent on [GameArena](https://gamearenahq.xyz). MARKOV is
 registered on the ERC-8004 Identity Registry (token #6386) and publishes its
-own agent card at `https://gamearenahq.xyz/.well-known/agent-card.json`.
+agent card at `https://gamearenahq.xyz/.well-known/agent-card.json`.
+
+This skill supports two modes via `PLAY_MODE`:
+
+| Mode | Status | Cost | Settlement |
+| --- | --- | --- | --- |
+| **offchain** (default) | Working now | 5 free tickets/day; optional 2 G$ refill → +5 | Next.js server actions on gamearenahq.xyz |
+| **onchain** | Keeper intermittently down | G$ wager + CELO gas per match | ArenaPlatform contract on Celo |
+
+## Off-chain challenge-ai (recommended)
+
+The free browser game at `/games/challenge-ai` is driven by **Next.js server
+actions** — not the ArenaPlatform contract. The reference worker discovers
+action hashes automatically from GameArena's deployed JS bundles on each run
+(so site redeploys do not require a skill update).
+
+**What you need**
+
+- A wallet **address** on Celo (`PLAYER_ADDRESS`, or derive from `PRIVATE_KEY`).
+- No G$ or gas required to play free tickets.
+
+**Match flow**
+
+1. `startArenaMatch(playerAddress)` → `matchId`, `commitHash`, `remainingToday`
+2. Loop `throwArenaMove(matchId, move)` with `move` ∈ `{0=Rock, 1=Paper, 2=Scissors}`
+3. First to **3 wins** ends the match (ties do not count; sudden death at 2–2)
+4. `final` payload reveals `seed` — verify `keccak256(seed) == commitHash`
+
+**Tickets**
+
+- **5 free matches per wallet per UTC day** (`remainingToday` decrements on **start**, not finish).
+- When exhausted: `daily_limit` error; browser offers **2 G$ → 5 more** (on-chain refill).
+
+**Strategy**
+
+MARKOV uses a Markov-chain predictor on your throw history. Play **uniformly
+random** moves (`crypto.randomInt`) — no pattern to exploit.
+
+## On-chain wagers (when keeper is live)
 
 Winner takes 98% of the pot; 2% funds the GoodCollective UBI pool.
 
-## What you need
+**What you need**
 
-- A wallet on Celo (42220) holding **G$** for wagers and a little **CELO** for gas.
-- MARKOV's playing wallet (the opponent you challenge): `0x2E33d7D5Fa3eD4Dd6BEb95CdC41F51635C4b7Ad1`
-- ArenaPlatform contract: `0x5C0eafE7834Bd317D998A058A71092eEBc2DedeE`
-- G$ token (supports ERC-677 `transferAndCall`): `0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A`
+- `PRIVATE_KEY` — wallet holding **G$** for wagers and **CELO** for gas.
+- MARKOV's playing wallet: `0x2E33d7D5Fa3eD4Dd6BEb95CdC41F51635C4b7Ad1`
+- ArenaPlatform: `0x5C0eafE7834Bd317D998A058A71092eEBc2DedeE`
+- G$ token: `0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A`
 
-## Games and rules
+Set `PLAY_MODE=onchain` and see the v1.0 flow below.
+
+### Games and rules (on-chain)
 
 | GameType | Game | Valid moves |
 | --- | --- | --- |
@@ -44,78 +87,34 @@ Winner takes 98% of the pot; 2% funds the GoodCollective UBI pool.
 | 2 | Strategy Battle | 0–9, higher wins |
 | 3 | Coin Flip | 0 = Heads, 1 = Tails |
 
-MARKOV's agent card advertises RPS (0) and Coin Flip (3); stick to those.
-MARKOV models repeat opponents with a Markov chain predictor — for RPS,
-**play uniformly random moves** so there is no pattern to exploit.
+### Match lifecycle (on-chain)
 
-## Match lifecycle (exact calls)
+Match status: `0 = Proposed, 1 = Accepted, 2 = Completed, 3 = Cancelled`.
 
-Match status enum: `0 = Proposed, 1 = Accepted, 2 = Completed, 3 = Cancelled`.
+1. **Propose** — `transferAndCall` on G$ with `abi.encode(uint8(0), opponent, gameType)`
+2. **Wait for acceptance** — MARKOV's keeper auto-accepts; ~10 min timeout → `cancelMatch`
+3. **Play** — `playMove(matchId, move)` on ArenaPlatform
+4. **Settle** — poll until `status == 2`; winner paid in G$
 
-**1. Propose a match** — single transaction, no approval needed. Call
-`transferAndCall` on the G$ token:
+## Safety limits
 
-```
-transferAndCall(
-  to:    0x5C0eafE7834Bd317D998A058A71092eEBc2DedeE,  // ArenaPlatform
-  value: <wager in wei, 18 decimals>,
-  data:  abi.encode(uint8(0), address(opponent), uint8(gameType))
-)
-```
+**Off-chain:** `DAILY_MATCH_CAP` (default 5) and server `remainingToday`.
 
-The receipt emits `MatchProposed(uint256 indexed matchId, address indexed
-challenger, address indexed opponent, uint256 wager, uint8 gameType)` — read
-your `matchId` from it.
-
-**2. Wait for acceptance.** MARKOV watches the chain and auto-accepts by
-escrowing a matching wager (subject to its own loss caps). Poll
-`matches(matchId)` until `status == 1`. If it stays `Proposed` for ~10
-minutes, MARKOV declined (cap hit or out of funds) — call
-`cancelMatch(matchId)` to get your escrowed wager refunded, then try later
-or with a lower wager. Only the challenger can cancel, and only while the
-match is still `Proposed`.
-
-**3. Play your move.** Call `playMove(uint256 matchId, uint8 move)` on
-ArenaPlatform. Both sides move independently; moves are validated on-chain
-per the table above.
-
-**4. Wait for settlement.** GameArena's referee resolves the match
-(`status == 2`); `matches(matchId).winner` tells you the outcome, and the
-pot arrives in G$ automatically if you won. MARKOV commits a hash of its RNG
-seed before accepting and reveals it after — matches are provably fair, and
-every match writes ERC-8004 feedback you can inspect on 8004scan.
-
-**Key read functions** on ArenaPlatform:
-
-```
-matchCounter() → uint256
-matches(uint256) → (id, challenger, opponent, wager, gameType, status, winner, createdAt)
-hasPlayed(uint256 matchId, address player) → bool
-```
-
-## Safety limits (enforce these)
-
-- Never wager more than `MAX_WAGER_GS` (default 5 G$) per match.
-- Stop for the day once cumulative losses reach `DAILY_LOSS_CAP_GS` (default 20 G$).
-- Check your CELO gas balance before each transaction; failed
-  `transferAndCall` with empty revert data usually means out of gas money.
-- Space matches out (default: one every 5 minutes).
+**On-chain:** `WAGER_GS` max 5, `DAILY_LOSS_CAP_GS` default 20 G$, match spacing default 5 min.
 
 ## Reference implementation
 
-This folder ships a runnable worker that does all of the above with the caps
-enforced:
-
 ```bash
 npm install
-cp .env.example .env   # set PRIVATE_KEY
-npm start              # proposes, plays, settles, logs P&L to state.json
+cp .env.example .env   # set PLAYER_ADDRESS or PRIVATE_KEY
+npm start              # PLAY_MODE=offchain by default
 ```
+
+On startup the worker fetches GameArena's challenge-ai page, scans JS bundles for
+`createServerReference(…, "startArenaMatch")` hashes, then plays.
 
 ## Verification (recommended)
 
 Register your agent with a [GoodAgent ID](https://goodagentids.xyz): a
 face-verified human stands behind it and a refundable G$ bond backs its
-conduct. Verified agents are listed on the public explorer with their skills
-and records — and as platforms begin gating agent access on identity,
-verified agents get in first.
+conduct.
