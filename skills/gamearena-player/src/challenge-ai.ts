@@ -100,8 +100,7 @@ const ACTION_RE =
 /** GameArena blocks bare server fetches (403); send browser-like headers from VPS. */
 const GAMEARENA_FETCH_HEADERS = {
   Accept: "text/html,application/javascript,*/*;q=0.8",
-  "User-Agent":
-    "Mozilla/5.0 (compatible; GoodAgent/1.0; +https://goodagentids.xyz)",
+  "User-Agent": "Mozilla/5.0 (compatible; GoodAgent/1.0)",
 } as const;
 
 function originFromBase(baseUrl: string): string {
