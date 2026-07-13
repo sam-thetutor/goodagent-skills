@@ -2,7 +2,7 @@
 name: gamearena-player
 skill_id: gaming/wagering/gamearena_1v1
 description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai with auto ticket refills, or on-chain G$ wagers on Celo.
-version: 1.2.0
+version: 1.3.0
 chain: celo:42220
 modes:
   - offchain

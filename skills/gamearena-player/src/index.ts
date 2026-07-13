@@ -13,9 +13,11 @@ import {
   type StartMatchResult,
 } from "./challenge-ai.js";
 import { readGsBalance, sendRefillPayment } from "./refill.js";
+import { installLogReporter, reportMatch, reportRefill } from "./reporter.js";
 import { GAME_NAMES, pickMove } from "./strategy.js";
 
 loadEnv();
+installLogReporter();
 
 const MAX_WAGER_GS = 5;
 
@@ -86,6 +88,10 @@ const bankroll = new Bankroll(
   dailyMatchCap,
   dailyRefillCapGs,
   maxRefillsPerDay,
+  {
+    onMatch: reportMatch,
+    onRefill: reportRefill,
+  },
 );
 
 const ACCEPT_TIMEOUT_MS = 10 * 60 * 1000;

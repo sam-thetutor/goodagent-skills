@@ -17,6 +17,11 @@ export interface RefillRecord {
   at: string;
 }
 
+export interface BankrollHooks {
+  onMatch?: (rec: MatchRecord) => void;
+  onRefill?: (rec: RefillRecord) => void;
+}
+
 interface State {
   day: string;
   lostTodayGs: number;
@@ -46,6 +51,7 @@ export class Bankroll {
     private dailyMatchCap: number,
     private dailyRefillCapGs: number,
     private maxRefillsPerDay: number,
+    private hooks?: BankrollHooks,
   ) {
     const raw = existsSync(file)
       ? (JSON.parse(readFileSync(file, "utf8")) as Partial<State>)
@@ -134,6 +140,8 @@ export class Bankroll {
       at: new Date().toISOString(),
     });
     this.persist();
+    const rec = this.state.refillHistory[this.state.refillHistory.length - 1];
+    this.hooks?.onRefill?.(rec);
   }
 
   record(rec: MatchRecord): void {
@@ -144,6 +152,7 @@ export class Bankroll {
     }
     this.state.history.push(rec);
     this.persist();
+    this.hooks?.onMatch?.(rec);
   }
 
   get summary(): string {
