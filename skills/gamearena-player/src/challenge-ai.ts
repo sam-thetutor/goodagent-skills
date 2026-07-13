@@ -97,6 +97,13 @@ type ActionMap = Partial<Record<ChallengeActionName, string>>;
 const ACTION_RE =
   /createServerReference\)\("([a-f0-9]+)"[^"]*"([^"]+)"\)/g;
 
+/** GameArena blocks bare server fetches (403); send browser-like headers from VPS. */
+const GAMEARENA_FETCH_HEADERS = {
+  Accept: "text/html,application/javascript,*/*;q=0.8",
+  "User-Agent":
+    "Mozilla/5.0 (compatible; GoodAgent/1.0; +https://goodagentids.xyz)",
+} as const;
+
 function originFromBase(baseUrl: string): string {
   return new URL(baseUrl).origin;
 }
@@ -169,6 +176,7 @@ export class ChallengeAiClient {
     const res = await fetch(this.pageUrl, {
       method: "POST",
       headers: {
+        ...GAMEARENA_FETCH_HEADERS,
         "Content-Type": "text/plain;charset=UTF-8",
         Origin: origin,
         Referer: this.pageUrl,
@@ -200,7 +208,7 @@ async function discoverActions(
   origin: string,
 ): Promise<ActionMap> {
   const pageRes = await fetch(pageUrl, {
-    headers: { Accept: "text/html" },
+    headers: GAMEARENA_FETCH_HEADERS,
   });
   if (!pageRes.ok) {
     throw new Error(`Failed to fetch GameArena page (${pageRes.status})`);
@@ -226,7 +234,9 @@ async function discoverActions(
   await Promise.all(
     chunkPaths.map(async (path) => {
       try {
-        const res = await fetch(`${origin}${path}`);
+        const res = await fetch(`${origin}${path}`, {
+          headers: GAMEARENA_FETCH_HEADERS,
+        });
         if (!res.ok) return;
         const js = await res.text();
         let match: RegExpExecArray | null;
