@@ -98,10 +98,38 @@ const ACTION_RE =
   /createServerReference\)\("([a-f0-9]+)"[^"]*"([^"]+)"\)/g;
 
 /** GameArena blocks bare server fetches (403); send browser-like headers from VPS. */
-const GAMEARENA_FETCH_HEADERS = {
-  Accept: "text/html,application/javascript,*/*;q=0.8",
-  "User-Agent": "Mozilla/5.0 (compatible; GoodAgent/1.0)",
+const GAMEARENA_USER_AGENT = "Mozilla/5.0 (compatible; GoodAgent/1.0)";
+
+const GAMEARENA_GET_HEADERS = {
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,application/javascript,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "User-Agent": GAMEARENA_USER_AGENT,
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
 } as const;
+
+const RETRYABLE_STATUSES = new Set([403, 429, 503]);
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  attempts = 5,
+): Promise<Response> {
+  let last: Response | null = null;
+  for (let i = 0; i < attempts; i++) {
+    const res = await fetch(url, init);
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || i === attempts - 1) {
+      return res;
+    }
+    last = res;
+    await new Promise((r) =>
+      setTimeout(r, 1000 * 2 ** i + Math.random() * 500),
+    );
+  }
+  return last!;
+}
 
 function originFromBase(baseUrl: string): string {
   return new URL(baseUrl).origin;
@@ -132,8 +160,26 @@ export class ChallengeAiClient {
   ): Promise<ChallengeAiClient> {
     const origin = originFromBase(baseUrl);
     const pageUrl = `${origin}/games/challenge-ai`;
-    const actions = await discoverActions(pageUrl, origin);
-    return new ChallengeAiClient(baseUrl, pageUrl, actions);
+    const maxAttempts = 6;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const actions = await discoverActions(pageUrl, origin);
+        return new ChallengeAiClient(baseUrl, pageUrl, actions);
+      } catch (error) {
+        lastError = error as Error;
+        const retryable = /\((403|429|503)\)/.test(lastError.message);
+        if (!retryable || attempt === maxAttempts - 1) break;
+        const delayMs = 2000 * 2 ** attempt;
+        console.error(
+          `[discovery] ${lastError.message} — retry ${attempt + 1}/${maxAttempts - 1} in ${Math.round(delayMs / 1000)}s`,
+        );
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+
+    throw lastError!;
   }
 
   getActionId(name: ChallengeActionName): string {
@@ -172,10 +218,15 @@ export class ChallengeAiClient {
     const actionId = this.getActionId(action);
     const origin = originFromBase(this.baseUrl);
 
-    const res = await fetch(this.pageUrl, {
+    const res = await fetchWithRetry(this.pageUrl, {
       method: "POST",
       headers: {
-        ...GAMEARENA_FETCH_HEADERS,
+        Accept: "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": GAMEARENA_USER_AGENT,
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
         "Content-Type": "text/plain;charset=UTF-8",
         Origin: origin,
         Referer: this.pageUrl,
@@ -206,8 +257,8 @@ async function discoverActions(
   pageUrl: string,
   origin: string,
 ): Promise<ActionMap> {
-  const pageRes = await fetch(pageUrl, {
-    headers: GAMEARENA_FETCH_HEADERS,
+  const pageRes = await fetchWithRetry(pageUrl, {
+    headers: GAMEARENA_GET_HEADERS,
   });
   if (!pageRes.ok) {
     throw new Error(`Failed to fetch GameArena page (${pageRes.status})`);
@@ -233,8 +284,8 @@ async function discoverActions(
   await Promise.all(
     chunkPaths.map(async (path) => {
       try {
-        const res = await fetch(`${origin}${path}`, {
-          headers: GAMEARENA_FETCH_HEADERS,
+        const res = await fetchWithRetry(`${origin}${path}`, {
+          headers: GAMEARENA_GET_HEADERS,
         });
         if (!res.ok) return;
         const js = await res.text();
