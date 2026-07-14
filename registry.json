@@ -17,6 +17,15 @@
       "opponent_agent": "erc8004:celo:6386"
     },
     {
+      "name": "ubi-reminder",
+      "skill_id": "social/reminder/ubi_claim_reminder",
+      "path": "skills/ubi-reminder",
+      "description": "Telegram agent that reminds subscribers to claim daily G$ UBI. On-chain claim streaks and leaderboard, live UBI pool stats, and face-verification expiry warnings — all read straight from Celo. Bring your own bot token from @BotFather.",
+      "chain": "celo:42220",
+      "spends_tokens": false,
+      "token": "G$"
+    },
+    {
       "name": "actionorder-player",
       "skill_id": "gaming/card-fighter/actionorder_vshouse",
       "path": "skills/actionorder-player",

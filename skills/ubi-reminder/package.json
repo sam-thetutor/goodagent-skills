@@ -1,0 +1,25 @@
+{
+  "name": "@goodagent/skill-ubi-reminder",
+  "version": "1.0.0",
+  "description": "GoodAgent skill: Telegram bot that reminds subscribers to claim daily G$ UBI, with on-chain claim streaks, pool stats, and identity-expiry warnings",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "grammy": "^1.44.0",
+    "viem": "^2.31.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
