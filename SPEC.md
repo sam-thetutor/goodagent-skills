@@ -72,3 +72,24 @@ Add your skill to `registry.json` so marketplaces and agents can discover it:
   "spends_tokens": true
 }
 ```
+
+### Listing & deploy flags (optional)
+
+Each skill entry may include:
+
+| Field | Default | Effect |
+| --- | --- | --- |
+| `listed` | `true` | When `false`, hide from [goodagentids.xyz/skills](https://goodagentids.xyz/skills) and the deploy picker. |
+| `enabled` | `true` | When `false`, block **new** deploys on the GoodAgent host (existing VPS agents keep running). |
+
+Set either flag to `false` to pause a skill without removing it from the registry.
+Omit both for normal visibility and deployability.
+
+Example — temporarily hide GameArena from the marketplace:
+
+```json
+{
+  "skill_id": "gaming/wagering/gamearena_1v1",
+  "listed": false
+}
+```
