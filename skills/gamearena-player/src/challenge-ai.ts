@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Address } from "viem";
 
 /** Server action names exposed by GameArena challenge-ai (Next.js). */
@@ -112,6 +114,69 @@ const GAMEARENA_GET_HEADERS = {
 
 const RETRYABLE_STATUSES = new Set([403, 429, 503]);
 
+const DISCOVERY_CACHE_FILE = "gamearena-discovery.json";
+const DISCOVERY_CACHE_MS = Number(
+  process.env.GAMEARENA_DISCOVERY_CACHE_MS ?? 24 * 60 * 60 * 1000,
+);
+
+interface DiscoveryCacheFile {
+  baseUrl: string;
+  pageUrl: string;
+  discoveredAt: string;
+  actions: ActionMap;
+}
+
+function discoveryCachePath(): string {
+  return resolve(process.cwd(), DISCOVERY_CACHE_FILE);
+}
+
+function loadDiscoveryCache(pageUrl: string): ActionMap | null {
+  const path = discoveryCachePath();
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as DiscoveryCacheFile;
+    if (raw.pageUrl !== pageUrl) return null;
+    const age = Date.now() - new Date(raw.discoveredAt).getTime();
+    if (!Number.isFinite(age) || age > DISCOVERY_CACHE_MS) return null;
+    const missing = REQUIRED_ACTIONS.filter((name) => !raw.actions[name]);
+    if (missing.length > 0) return null;
+    return raw.actions;
+  } catch {
+    return null;
+  }
+}
+
+function saveDiscoveryCache(
+  baseUrl: string,
+  pageUrl: string,
+  actions: ActionMap,
+): void {
+  const payload: DiscoveryCacheFile = {
+    baseUrl,
+    pageUrl,
+    discoveredAt: new Date().toISOString(),
+    actions,
+  };
+  writeFileSync(discoveryCachePath(), JSON.stringify(payload, null, 2));
+}
+
+export function clearDiscoveryCache(): void {
+  try {
+    const path = discoveryCachePath();
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // ignore
+  }
+}
+
+export function isGameArenaBlockedError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return (
+    /\((403|429|503)\)/.test(msg) ||
+    msg.includes("Failed to fetch GameArena page")
+  );
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -160,16 +225,26 @@ export class ChallengeAiClient {
   ): Promise<ChallengeAiClient> {
     const origin = originFromBase(baseUrl);
     const pageUrl = `${origin}/games/challenge-ai`;
+
+    const cached = loadDiscoveryCache(pageUrl);
+    if (cached) {
+      console.log(
+        "[discovery] using cached server actions (skip GameArena page fetch)",
+      );
+      return new ChallengeAiClient(baseUrl, pageUrl, cached);
+    }
+
     const maxAttempts = 6;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const actions = await discoverActions(pageUrl, origin);
+        saveDiscoveryCache(baseUrl, pageUrl, actions);
         return new ChallengeAiClient(baseUrl, pageUrl, actions);
       } catch (error) {
         lastError = error as Error;
-        const retryable = /\((403|429|503)\)/.test(lastError.message);
+        const retryable = isGameArenaBlockedError(lastError);
         if (!retryable || attempt === maxAttempts - 1) break;
         const delayMs = 2000 * 2 ** attempt;
         console.error(
@@ -236,6 +311,9 @@ export class ChallengeAiClient {
     });
 
     if (!res.ok) {
+      if (RETRYABLE_STATUSES.has(res.status)) {
+        clearDiscoveryCache();
+      }
       throw new ChallengeAiStaleActionsError(
         `GameArena ${action} failed (HTTP ${res.status}) — action ID ${actionId} may be stale after a site redeploy.`,
       );

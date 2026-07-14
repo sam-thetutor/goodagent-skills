@@ -9,6 +9,8 @@ import {
 import { Bankroll, type PlayMode } from "./bankroll.js";
 import {
   ChallengeAiClient,
+  ChallengeAiStaleActionsError,
+  isGameArenaBlockedError,
   type RefillOffer,
   type StartMatchResult,
 } from "./challenge-ai.js";
@@ -96,6 +98,49 @@ const bankroll = new Bankroll(
 
 const ACCEPT_TIMEOUT_MS = 10 * 60 * 1000;
 const RESOLVE_TIMEOUT_MS = 15 * 60 * 1000;
+const BLOCKED_RETRY_CAP_MS = 5 * 60 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Spread agent startups so many PM2 processes do not hit GameArena at once. */
+function startupJitterMs(): number {
+  const maxSec = Math.max(
+    0,
+    Number(process.env.STARTUP_JITTER_SECONDS ?? 120),
+  );
+  if (maxSec === 0) return 0;
+  const deployId = process.env.DEPLOY_ID?.trim();
+  if (deployId) {
+    let h = 0;
+    for (let i = 0; i < deployId.length; i++) {
+      h = (h * 31 + deployId.charCodeAt(i)) >>> 0;
+    }
+    return h % (maxSec * 1000);
+  }
+  return Math.floor(Math.random() * maxSec * 1000);
+}
+
+async function connectChallengeAi(): Promise<ChallengeAiClient> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await ChallengeAiClient.create(challengeAiUrl);
+    } catch (error) {
+      if (!isGameArenaBlockedError(error)) throw error;
+      attempt += 1;
+      const delayMs = Math.min(
+        BLOCKED_RETRY_CAP_MS,
+        30_000 * Math.min(attempt, 10) + Math.floor(Math.random() * 10_000),
+      );
+      console.error(
+        `[discovery] GameArena unreachable (${(error as Error).message}) — waiting ${Math.round(delayMs / 1000)}s (attempt ${attempt})`,
+      );
+      await sleep(delayMs);
+    }
+  }
+}
 
 async function tryAutoRefill(
   client: ChallengeAiClient,
@@ -350,6 +395,14 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
 }
 
 async function main(): Promise<void> {
+  const jitter = startupJitterMs();
+  if (jitter > 0) {
+    console.log(
+      `[startup] waiting ${Math.round(jitter / 1000)}s (staggered boot for GameArena rate limits)`,
+    );
+    await sleep(jitter);
+  }
+
   console.log(
     `GameArena player — ${playMode} mode · wallet ${playerAddress}`,
   );
@@ -359,7 +412,7 @@ async function main(): Promise<void> {
     console.log(
       `game=RPS tickets≤${matchCapLabel} autoRefill=${autoRefill} refillBudget=${dailyRefillCapGs}G$/day maxMatches=${maxMatches || "∞"}`,
     );
-    const client = await ChallengeAiClient.create(challengeAiUrl);
+    const client = await connectChallengeAi();
     console.log(
       `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}… refill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`,
     );
@@ -372,6 +425,17 @@ async function main(): Promise<void> {
         played += 1;
         console.log(`[bankroll] ${bankroll.summary}`);
       } catch (error) {
+        if (error instanceof ChallengeAiStaleActionsError) {
+          console.error("[error]", error.message);
+          break;
+        }
+        if (isGameArenaBlockedError(error)) {
+          console.error(
+            `[pause] ${(error as Error).message} — backing off ${Math.round(BLOCKED_RETRY_CAP_MS / 1000)}s`,
+          );
+          await sleep(BLOCKED_RETRY_CAP_MS);
+          continue;
+        }
         console.error("[error]", (error as Error).message);
         break;
       }
@@ -405,6 +469,14 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  if (isGameArenaBlockedError(error)) {
+    console.error(
+      "[blocked] GameArena still rate-limiting — exiting cleanly; PM2 will retry later",
+      (error as Error).message,
+    );
+    process.exit(0);
+    return;
+  }
   console.error("[fatal]", (error as Error).message);
   process.exit(1);
 });
