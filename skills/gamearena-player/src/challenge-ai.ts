@@ -26,6 +26,14 @@ export class ChallengeAiStaleActionsError extends Error {
   }
 }
 
+/** VPS IP rate limits (403/429/503) — action hashes are still valid; retry later. */
+export class GameArenaBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GameArenaBlockedError";
+  }
+}
+
 export interface ChallengeScore {
   player: number;
   ai: number;
@@ -170,9 +178,11 @@ export function clearDiscoveryCache(): void {
 }
 
 export function isGameArenaBlockedError(error: unknown): boolean {
+  if (error instanceof GameArenaBlockedError) return true;
   const msg = error instanceof Error ? error.message : String(error);
   return (
     /\((403|429|503)\)/.test(msg) ||
+    /failed \(HTTP (403|429|503)\)/i.test(msg) ||
     msg.includes("Failed to fetch GameArena page")
   );
 }
@@ -312,7 +322,9 @@ export class ChallengeAiClient {
 
     if (!res.ok) {
       if (RETRYABLE_STATUSES.has(res.status)) {
-        clearDiscoveryCache();
+        throw new GameArenaBlockedError(
+          `GameArena ${action} failed (HTTP ${res.status})`,
+        );
       }
       throw new ChallengeAiStaleActionsError(
         `GameArena ${action} failed (HTTP ${res.status}) — action ID ${actionId} may be stale after a site redeploy.`,
@@ -339,6 +351,11 @@ async function discoverActions(
     headers: GAMEARENA_GET_HEADERS,
   });
   if (!pageRes.ok) {
+    if (RETRYABLE_STATUSES.has(pageRes.status)) {
+      throw new GameArenaBlockedError(
+        `Failed to fetch GameArena page (${pageRes.status})`,
+      );
+    }
     throw new Error(`Failed to fetch GameArena page (${pageRes.status})`);
   }
 
