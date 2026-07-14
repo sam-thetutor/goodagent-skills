@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "dotenv": "^16.5.0",
+    "undici": "^7.10.0",
     "viem": "^2.31.3"
   },
   "devDependencies": {

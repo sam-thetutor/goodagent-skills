@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { gamearenaFetch } from "./gamearena-fetch.js";
 import type { Address } from "viem";
 
 /** Server action names exposed by GameArena challenge-ai (Next.js). */
@@ -194,7 +195,7 @@ async function fetchWithRetry(
 ): Promise<Response> {
   let last: Response | null = null;
   for (let i = 0; i < attempts; i++) {
-    const res = await fetch(url, init);
+    const res = await gamearenaFetch(url, init);
     if (res.ok || !RETRYABLE_STATUSES.has(res.status) || i === attempts - 1) {
       return res;
     }
