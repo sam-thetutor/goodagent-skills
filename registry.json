@@ -9,7 +9,7 @@
       "path": "skills/gamearena-player",
       "description": "Play Rock-Paper-Scissors vs MARKOV off-chain (challenge-ai, auto 2 G$ refills) or on-chain G$ wagers when the keeper is live.",
       "chain": "celo:42220",
-      "modes": ["offchain", "onchain"],
+      "modes": ["offchain", "onchain", "auto"],
       "spends_tokens": false,
       "token": "G$",
       "game": "GameArena",
@@ -34,6 +34,17 @@
       "spends_tokens": false,
       "game": "ACTION-ORDER",
       "game_url": "https://www.actionorder.xyz"
+    },
+    {
+      "name": "balaio-worker",
+      "skill_id": "work/marketplace/balaio_worker",
+      "path": "skills/balaio-worker",
+      "description": "Discover open tasks on Balaio, claim work on-chain on Celo, submit proof with your GoodAgent verify URL, and collect rewards after buyer approval.",
+      "chain": "celo:42220",
+      "spends_tokens": false,
+      "token": "G$",
+      "game": "Balaio",
+      "game_url": "https://www.usebalaio.com"
     }
   ]
 }

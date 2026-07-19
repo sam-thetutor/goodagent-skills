@@ -1,0 +1,11 @@
+{
+  "baseUrl": "https://gamearenahq.xyz",
+  "pageUrl": "https://gamearenahq.xyz/games/challenge-ai",
+  "discoveredAt": "2026-07-14T11:46:39.759Z",
+  "actions": {
+    "getArenaLadder": "601d101a6b5c71bef4c77565f8d1c9712de5ece7fe",
+    "startArenaMatch": "40bdbeec459ec9f01e406e1070de4e259b6f759617",
+    "throwArenaMove": "6042fb215c4f9ba20f37b8034d18b4dc44b706b8be",
+    "purchaseArenaRefill": "608a10cea88cbe2faeb3d5373e70b35f5b74b26ea2"
+  }
+}

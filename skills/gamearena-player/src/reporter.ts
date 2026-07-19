@@ -36,6 +36,7 @@ export function reportMatch(rec: MatchRecord): void {
     wagerGs: rec.wagerGs,
     result: rec.result,
     mode: rec.mode,
+    strategy: rec.strategy,
     at: rec.at,
   });
 }

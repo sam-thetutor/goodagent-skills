@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 export type PlayMode = "offchain" | "onchain";
+export type ConfigPlayMode = PlayMode | "auto";
 
 export interface MatchRecord {
   matchId: string;
@@ -8,6 +9,7 @@ export interface MatchRecord {
   wagerGs: number;
   result: "won" | "lost" | "unresolved";
   mode: PlayMode;
+  strategy?: string;
   at: string;
 }
 
@@ -45,7 +47,7 @@ export class Bankroll {
 
   constructor(
     private file: string,
-    private mode: PlayMode,
+    private mode: ConfigPlayMode,
     private dailyLossCapGs: number,
     /** 0 = unlimited matches per UTC day */
     private dailyMatchCap: number,
@@ -92,16 +94,13 @@ export class Bankroll {
 
   canPlay(wagerGs: number): { ok: boolean; reason?: string } {
     this.rollover();
-    if (this.mode === "offchain") {
-      if (this.dailyMatchCap > 0 && this.state.matchesToday >= this.dailyMatchCap) {
-        return {
-          ok: false,
-          reason: `daily match cap: played ${this.state.matchesToday} of ${this.dailyMatchCap} matches today`,
-        };
-      }
-      return { ok: true };
+    if (this.dailyMatchCap > 0 && this.state.matchesToday >= this.dailyMatchCap) {
+      return {
+        ok: false,
+        reason: `daily match cap: played ${this.state.matchesToday} of ${this.dailyMatchCap} matches today`,
+      };
     }
-    if (this.state.lostTodayGs + wagerGs > this.dailyLossCapGs) {
+    if (wagerGs > 0 && this.state.lostTodayGs + wagerGs > this.dailyLossCapGs) {
       return {
         ok: false,
         reason: `daily loss cap: lost ${this.state.lostTodayGs} G$ of ${this.dailyLossCapGs} G$ cap, next wager ${wagerGs} G$ would exceed it`,
@@ -158,15 +157,13 @@ export class Bankroll {
   get summary(): string {
     const wins = this.state.history.filter((h) => h.result === "won").length;
     const losses = this.state.history.filter((h) => h.result === "lost").length;
-    if (this.mode === "offchain") {
-      const cap =
-        this.dailyMatchCap > 0 ? `/${this.dailyMatchCap}` : "";
-      const refill =
-        this.state.refillsToday > 0
-          ? ` · refills ${this.state.refillsToday} (${this.state.spentOnRefillsTodayGs} G$)`
-          : "";
-      return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday}${cap} matches${refill}`;
-    }
-    return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday} matches, ${this.state.lostTodayGs} G$ lost`;
+    const cap = this.dailyMatchCap > 0 ? `/${this.dailyMatchCap}` : "";
+    const refill =
+      this.state.refillsToday > 0
+        ? ` · refills ${this.state.refillsToday} (${this.state.spentOnRefillsTodayGs} G$)`
+        : "";
+    const loss =
+      this.state.lostTodayGs > 0 ? ` · ${this.state.lostTodayGs} G$ lost` : "";
+    return `lifetime ${wins}W/${losses}L · today ${this.state.matchesToday}${cap} matches${refill}${loss}`;
   }
 }

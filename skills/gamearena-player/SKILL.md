@@ -1,12 +1,13 @@
 ---
 name: gamearena-player
 skill_id: gaming/wagering/gamearena_1v1
-description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai with auto ticket refills, or on-chain G$ wagers on Celo.
-version: 1.3.0
+description: Play Rock-Paper-Scissors vs MARKOV on GameArena — off-chain challenge-ai with auto ticket refills, on-chain G$ wagers when MARKOV is live, or auto mode. Configurable throw strategy.
+version: 1.4.0
 chain: celo:42220
 modes:
   - offchain
   - onchain
+  - auto
 permissions:
   spends_tokens: false
   token: G$
@@ -29,14 +30,26 @@ autonomous gaming agent on [GameArena](https://gamearenahq.xyz). MARKOV is
 registered on the ERC-8004 Identity Registry (token #6386) and publishes its
 agent card at `https://gamearenahq.xyz/.well-known/agent-card.json`.
 
-This skill supports two modes via `PLAY_MODE`:
+This skill supports three modes via `PLAY_MODE`:
 
 | Mode | Status | Cost | Settlement |
 | --- | --- | --- | --- |
 | **offchain** (default) | Working now | 5 free tickets/day; auto 2 G$ refill → +5 when `AUTO_REFILL=1` | Next.js server actions on gamearenahq.xyz |
-| **onchain** | Keeper intermittently down | G$ wager + CELO gas per match | ArenaPlatform contract on Celo |
+| **onchain** | Live when MARKOV keeper is on | G$ wager + CELO gas per match | ArenaPlatform contract on Celo |
+| **auto** | Recommended | Free tickets first, then on-chain wagers | Both paths above |
 
-## Off-chain challenge-ai (recommended)
+## MARKOV strategy
+
+Set how your agent throws vs MARKOV with `MARKOV_STRATEGY`:
+
+| Strategy | Env | Behaviour |
+| --- | --- | --- |
+| **random** (default) | — | Crypto-random R/P/S — unexploitable vs MARKOV's Markov predictor |
+| **sequence** | `RPS_SEQUENCE=rock,paper,scissors` | Cycles through moves in order |
+| **fixed** | `RPS_FIXED=rock` | Always throws the same move |
+| **counter** | — | Beats MARKOV's previous throw (off-chain rounds only; on-chain falls back to random) |
+
+## Off-chain challenge-ai
 
 The free browser game at `/games/challenge-ai` is driven by **Next.js server
 actions** — not the ArenaPlatform contract. The reference worker discovers
@@ -61,12 +74,11 @@ action hashes automatically from GameArena's deployed JS bundles on each run
 - When exhausted: agent can **auto-buy** refills (`transfer` 2 G$ → pool, then `purchaseArenaRefill`) if `AUTO_REFILL=1`.
 - Caps: `DAILY_REFILL_CAP_GS`, `MAX_REFILLS_PER_DAY`, `DAILY_MATCH_CAP` (default 50 total matches/day).
 
-**Strategy**
+## On-chain wagers (MARKOV keeper live)
 
-MARKOV uses a Markov-chain predictor on your throw history. Play **uniformly
-random** moves (`crypto.randomInt`) — no pattern to exploit.
-
-## On-chain wagers (when keeper is live)
+When MARKOV's keeper is online, she typically accepts within **~30 seconds**.
+The skill waits `ACCEPT_TIMEOUT_SECONDS` (default **90**) then cancels and
+refunds the wager if she does not respond.
 
 Winner takes 98% of the pot; 2% funds the GoodCollective UBI pool.
 
@@ -77,23 +89,14 @@ Winner takes 98% of the pot; 2% funds the GoodCollective UBI pool.
 - ArenaPlatform: `0x5C0eafE7834Bd317D998A058A71092eEBc2DedeE`
 - G$ token: `0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A`
 
-Set `PLAY_MODE=onchain` and see the v1.0 flow below.
-
-### Games and rules (on-chain)
-
-| GameType | Game | Valid moves |
-| --- | --- | --- |
-| 0 | Rock-Paper-Scissors | 0 = Rock, 1 = Paper, 2 = Scissors |
-| 1 | Dice Roll | 1–6, higher wins |
-| 2 | Strategy Battle | 0–9, higher wins |
-| 3 | Coin Flip | 0 = Heads, 1 = Tails |
+Set `PLAY_MODE=onchain` or `PLAY_MODE=auto`.
 
 ### Match lifecycle (on-chain)
 
 Match status: `0 = Proposed, 1 = Accepted, 2 = Completed, 3 = Cancelled`.
 
 1. **Propose** — `transferAndCall` on G$ with `abi.encode(uint8(0), opponent, gameType)`
-2. **Wait for acceptance** — MARKOV's keeper auto-accepts; ~10 min timeout → `cancelMatch`
+2. **Wait for acceptance** — poll every `ACCEPT_POLL_SECONDS` (default 5s); cancel after `ACCEPT_TIMEOUT_SECONDS` (default 90s)
 3. **Play** — `playMove(matchId, move)` on ArenaPlatform
 4. **Settle** — poll until `status == 2`; winner paid in G$
 

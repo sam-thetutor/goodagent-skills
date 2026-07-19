@@ -6,7 +6,7 @@ import {
   MARKOV_ADDRESS,
   MatchStatus,
 } from "./arena.js";
-import { Bankroll, type PlayMode } from "./bankroll.js";
+import { Bankroll, type ConfigPlayMode, type PlayMode } from "./bankroll.js";
 import {
   ChallengeAiClient,
   ChallengeAiStaleActionsError,
@@ -16,7 +16,12 @@ import {
 } from "./challenge-ai.js";
 import { readGsBalance, sendRefillPayment } from "./refill.js";
 import { installLogReporter, reportMatch, reportRefill } from "./reporter.js";
-import { GAME_NAMES, pickMove } from "./strategy.js";
+import {
+  createMarkovStrategy,
+  GAME_NAMES,
+  strategyLabel,
+  type MarkovStrategy,
+} from "./strategy.js";
 
 loadEnv();
 installLogReporter();
@@ -29,10 +34,10 @@ function envFlag(name: string, defaultOn = true): boolean {
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
-function resolvePlayMode(): PlayMode {
+function resolvePlayMode(): ConfigPlayMode {
   const mode = (process.env.PLAY_MODE ?? "offchain").toLowerCase();
-  if (mode === "onchain" || mode === "offchain") return mode;
-  console.error('PLAY_MODE must be "offchain" or "onchain"');
+  if (mode === "onchain" || mode === "offchain" || mode === "auto") return mode;
+  console.error('PLAY_MODE must be "offchain", "onchain", or "auto"');
   process.exit(1);
 }
 
@@ -53,8 +58,8 @@ function resolvePlayerAddress(privateKey?: Hex): Address {
 const playMode = resolvePlayMode();
 const privateKey = process.env.PRIVATE_KEY?.trim() as Hex | undefined;
 
-if (playMode === "onchain" && !privateKey) {
-  console.error("PRIVATE_KEY is required for on-chain play. Copy .env.example to .env");
+if ((playMode === "onchain" || playMode === "auto") && !privateKey) {
+  console.error("PRIVATE_KEY is required for on-chain and auto play. Copy .env.example to .env");
   process.exit(1);
 }
 
@@ -96,9 +101,22 @@ const bankroll = new Bankroll(
   },
 );
 
-const ACCEPT_TIMEOUT_MS = 10 * 60 * 1000;
-const RESOLVE_TIMEOUT_MS = 15 * 60 * 1000;
+const ACCEPT_TIMEOUT_MS =
+  Math.max(15, Number(process.env.ACCEPT_TIMEOUT_SECONDS ?? 90)) * 1000;
+const RESOLVE_TIMEOUT_MS =
+  Math.max(30, Number(process.env.RESOLVE_TIMEOUT_SECONDS ?? 120)) * 1000;
+const ACCEPT_POLL_MS =
+  Math.max(3, Number(process.env.ACCEPT_POLL_SECONDS ?? 5)) * 1000;
 const BLOCKED_RETRY_CAP_MS = 5 * 60 * 1000;
+
+const markovStrategy: MarkovStrategy = createMarkovStrategy();
+const strategyName = strategyLabel(markovStrategy);
+
+function recordMatch(
+  rec: Parameters<Bankroll["record"]>[0],
+): void {
+  bankroll.record({ ...rec, strategy: strategyName });
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -251,7 +269,7 @@ async function resolveOffchainStart(
 
 async function playOffchainMatch(
   client: ChallengeAiClient,
-): Promise<"played" | "skipped"> {
+): Promise<"played" | "skipped" | "exhausted"> {
   const gate = bankroll.canPlay(0);
   if (!gate.ok) {
     console.log(`[skip] ${gate.reason}`);
@@ -259,22 +277,33 @@ async function playOffchainMatch(
   }
 
   const started = await resolveOffchainStart(client);
-  if (!started?.matchId) return "skipped";
+  if (!started?.matchId) return "exhausted";
 
   const { matchId, remainingToday, commitHash } = started;
+  markovStrategy.beginMatch(matchId);
   console.log(
-    `[start] match ${matchId} · commit ${commitHash?.slice(0, 10)}… · tickets left ${remainingToday ?? "?"}`,
+    `[start] match ${matchId} · commit ${commitHash?.slice(0, 10)}… · tickets left ${remainingToday ?? "?"} · strategy ${strategyName}`,
   );
 
   let finalOutcome: "won" | "lost" | "unresolved" = "unresolved";
+  let lastAiMove: number | undefined;
 
   while (true) {
-    const { move, label } = pickMove(0);
+    const { move, label } = markovStrategy.nextMove({
+      gameType: 0,
+      round: undefined,
+      lastAiMove,
+      matchId,
+    });
     const round = await client.throwMove(matchId, move);
 
     if (round.error) {
       console.log(`[match ${matchId}] throw error: ${round.error}`);
       break;
+    }
+
+    if (typeof round.aiMove === "number") {
+      lastAiMove = round.aiMove;
     }
 
     console.log(
@@ -294,7 +323,7 @@ async function playOffchainMatch(
     }
   }
 
-  bankroll.record({
+  recordMatch({
     matchId,
     gameType: 0,
     wagerGs: 0,
@@ -327,15 +356,18 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
   );
   const matchId = await arena.proposeMatch(MARKOV_ADDRESS, gameType, String(wagerGs));
   console.log(`[propose] match #${matchId} escrowed on-chain`);
+  markovStrategy.beginMatch(matchId.toString());
 
+  const acceptStarted = Date.now();
   const accepted = await arena.waitForStatus(
     matchId,
     MatchStatus.Accepted,
     ACCEPT_TIMEOUT_MS,
+    ACCEPT_POLL_MS,
   );
   if (!accepted || accepted.status !== MatchStatus.Accepted) {
     console.log(
-      `[match #${matchId}] not accepted in time (MARKOV cap or funds) — cancelling to recover the wager`,
+      `[match #${matchId}] MARKOV did not accept within ${Math.round(ACCEPT_TIMEOUT_MS / 1000)}s — cancelling to recover the wager`,
     );
     try {
       await arena.cancelMatch(matchId);
@@ -345,7 +377,7 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
         `[match #${matchId}] cancel failed (${(error as Error).message}) — it may have just been accepted; will remain on-chain`,
       );
     }
-    bankroll.record({
+    recordMatch({
       matchId: matchId.toString(),
       gameType,
       wagerGs,
@@ -356,18 +388,22 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
     return "played";
   }
 
-  const { move, label } = pickMove(gameType);
-  console.log(`[match #${matchId}] accepted — playing ${label}`);
+  const acceptMs = Date.now() - acceptStarted;
+  const { move, label } = markovStrategy.nextMove({ gameType, matchId: matchId.toString() });
+  console.log(
+    `[match #${matchId}] accepted in ${Math.round(acceptMs / 1000)}s — playing ${label} (${strategyName})`,
+  );
   await arena.playMove(matchId, move);
 
   const done = await arena.waitForStatus(
     matchId,
     MatchStatus.Completed,
     RESOLVE_TIMEOUT_MS,
+    ACCEPT_POLL_MS,
   );
   if (!done || done.status !== MatchStatus.Completed) {
     console.log(`[match #${matchId}] not resolved yet — check later`);
-    bankroll.record({
+    recordMatch({
       matchId: matchId.toString(),
       gameType,
       wagerGs,
@@ -383,7 +419,7 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
   console.log(
     `[match #${matchId}] ${won ? "WON" : "lost"} — winner ${done.winner}`,
   );
-  bankroll.record({
+  recordMatch({
     matchId: matchId.toString(),
     gameType,
     wagerGs,
@@ -392,6 +428,18 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
     at: new Date().toISOString(),
   });
   return "played";
+}
+
+async function playAutoMatch(
+  client: ChallengeAiClient,
+  arena: ArenaClient,
+): Promise<"played" | "skipped"> {
+  const offchain = await playOffchainMatch(client);
+  if (offchain === "played") return "played";
+  if (offchain === "skipped") return "skipped";
+
+  console.log("[auto] off-chain tickets exhausted — trying on-chain wager");
+  return playOnchainMatch(arena);
 }
 
 async function main(): Promise<void> {
@@ -404,10 +452,10 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `GameArena player — ${playMode} mode · wallet ${playerAddress}`,
+    `GameArena player — ${playMode} mode · wallet ${playerAddress} · strategy ${strategyName}`,
   );
 
-  if (playMode === "offchain") {
+  if (playMode === "offchain" || playMode === "auto") {
     const matchCapLabel = dailyMatchCap > 0 ? `${dailyMatchCap}/day` : "∞/day";
     console.log(
       `game=RPS tickets≤${matchCapLabel} autoRefill=${autoRefill} refillBudget=${dailyRefillCapGs}G$/day maxMatches=${maxMatches || "∞"}`,
@@ -417,11 +465,22 @@ async function main(): Promise<void> {
       `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}… refill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`,
     );
 
+    const arena =
+      playMode === "auto" ? new ArenaClient(privateKey!, rpcUrl) : null;
+    if (playMode === "auto") {
+      console.log(
+        `auto: off-chain first, then on-chain (${wagerGs}G$ wager, accept≤${Math.round(ACCEPT_TIMEOUT_MS / 1000)}s)`,
+      );
+    }
+
     let played = 0;
     while (maxMatches === 0 || played < maxMatches) {
       try {
-        const outcome = await playOffchainMatch(client);
-        if (outcome === "skipped") break;
+        const outcome =
+          playMode === "auto"
+            ? await playAutoMatch(client, arena!)
+            : await playOffchainMatch(client);
+        if (outcome === "skipped" || outcome === "exhausted") break;
         played += 1;
         console.log(`[bankroll] ${bankroll.summary}`);
       } catch (error) {
@@ -446,7 +505,7 @@ async function main(): Promise<void> {
   } else {
     const arena = new ArenaClient(privateKey!, rpcUrl);
     console.log(
-      `game=${GAME_NAMES[gameType]} wager=${wagerGs}G$ lossCap=${lossCapGs}G$ maxMatches=${maxMatches || "∞"}`,
+      `game=${GAME_NAMES[gameType]} wager=${wagerGs}G$ lossCap=${lossCapGs}G$ accept≤${Math.round(ACCEPT_TIMEOUT_MS / 1000)}s maxMatches=${maxMatches || "∞"}`,
     );
 
     let played = 0;
