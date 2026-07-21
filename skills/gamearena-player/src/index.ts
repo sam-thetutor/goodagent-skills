@@ -14,7 +14,7 @@ import {
   type RefillOffer,
   type StartMatchResult,
 } from "./challenge-ai.js";
-import { readGsBalance, sendRefillPayment } from "./refill.js";
+import { readGsBalance, buyMatchPackGasless, perkIdFromRefillOffer } from "./refill.js";
 import { installLogReporter, reportMatch, reportRefill } from "./reporter.js";
 import {
   createMarkovStrategy,
@@ -193,16 +193,63 @@ async function tryAutoRefill(
       return false;
     }
 
+    const perkId = perkIdFromRefillOffer(offer);
+    let txHash: string;
+
+    if (client.supportsPerkRefill()) {
+      console.log(
+        `[refill] Match Pack perk ${perkId} · ${offer.priceGs} G$ → +${offer.grants} tickets (gasless)`,
+      );
+      txHash = await buyMatchPackGasless(
+        privateKey,
+        rpcUrl,
+        playerAddress,
+        (sig) => client.buyPerkGasless(playerAddress, sig),
+        offer.priceGs,
+        perkId,
+        offer.gToken,
+      );
+      console.log(`[refill] perk tx ${txHash}`);
+
+      let credited = await client.grantPerk(playerAddress, txHash);
+      if (!credited.ok) {
+        console.log("[refill] waiting for server to index perk purchase…");
+        await sleep(4000);
+        credited = await client.grantPerk(playerAddress, txHash);
+      }
+
+      if (!credited.ok) {
+        console.log(
+          `[refill] perk bought but not credited yet (${credited.error ?? "unknown"}) — tx ${txHash}`,
+        );
+        return false;
+      }
+
+      bankroll.recordRefill(offer.priceGs, txHash);
+      console.log(
+        `[refill] credited · ${credited.remaining ?? "?"} tickets left today`,
+      );
+      return true;
+    }
+
+    if (!client.supportsLegacyRefill()) {
+      console.log(
+        "[refill] skip — no perk or legacy refill actions on GameArena",
+      );
+      return false;
+    }
+
     console.log(
-      `[refill] paying ${offer.priceGs} G$ → +${offer.grants} tickets (pool ${offer.poolWallet.slice(0, 10)}…)`,
+      `[refill] paying ${offer.priceGs} G$ → +${offer.grants} tickets (legacy pool ${offer.poolWallet.slice(0, 10)}…)`,
     );
-    const txHash = await sendRefillPayment(privateKey, rpcUrl, offer);
+    const { sendRefillPayment } = await import("./refill.js");
+    txHash = await sendRefillPayment(privateKey, rpcUrl, offer);
     console.log(`[refill] tx ${txHash}`);
 
     let credited = await client.purchaseRefill(playerAddress, txHash);
     if (!credited.ok) {
       console.log("[refill] waiting for server to index payment…");
-      await new Promise((r) => setTimeout(r, 4000));
+      await sleep(4000);
       credited = await client.purchaseRefill(playerAddress, txHash);
     }
 
@@ -462,7 +509,16 @@ async function main(): Promise<void> {
     );
     const client = await connectChallengeAi();
     console.log(
-      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}… refill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`,
+      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}…` +
+        (client.hasAction("buyPerkGasless")
+          ? ` buyGasless=${client.getActionId("buyPerkGasless").slice(0, 8)}…`
+          : "") +
+        (client.hasAction("grantPerk")
+          ? ` grant=${client.getActionId("grantPerk").slice(0, 8)}…`
+          : "") +
+        (client.hasAction("purchaseArenaRefill")
+          ? ` legacyRefill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`
+          : " legacyRefill=unavailable"),
     );
 
     const arena =

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { gamearenaFetch } from "./gamearena-fetch.js";
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 
 /** Server action names exposed by GameArena challenge-ai (Next.js). */
 export const CHALLENGE_ACTIONS = [
@@ -9,15 +9,29 @@ export const CHALLENGE_ACTIONS = [
   "throwArenaMove",
   "getArenaLadder",
   "purchaseArenaRefill",
+  "buyPerkGasless",
+  "grantPerk",
+  "getPerkInventory",
+  "getArenaMatchReceipt",
+  "consumePerkStock",
 ] as const;
 
 export type ChallengeActionName = (typeof CHALLENGE_ACTIONS)[number];
 
+/** Minimum actions to play off-chain matches. Refill/ladder are optional (GameArena redeploys rename them). */
 const REQUIRED_ACTIONS: ChallengeActionName[] = [
   "startArenaMatch",
   "throwArenaMove",
+];
+
+const OPTIONAL_ACTIONS: ChallengeActionName[] = [
   "getArenaLadder",
   "purchaseArenaRefill",
+  "buyPerkGasless",
+  "grantPerk",
+  "getPerkInventory",
+  "getArenaMatchReceipt",
+  "consumePerkStock",
 ];
 
 export class ChallengeAiStaleActionsError extends Error {
@@ -86,6 +100,32 @@ export interface StartMatchResult {
 export interface PurchaseRefillResult {
   ok?: boolean;
   remaining?: number;
+  error?: string;
+}
+
+/** EIP-712 G$ permit signature for GameArena perk shop relayer. */
+export interface BuyPerkGaslessSig {
+  perkId: number;
+  deadline: string;
+  v: number;
+  r: Hex;
+  s: Hex;
+}
+
+export interface BuyPerkGaslessResult {
+  ok?: boolean;
+  txHash?: Hex;
+  error?: string;
+}
+
+export interface GrantPerkResult {
+  ok?: boolean;
+  remaining?: number;
+  error?: string;
+}
+
+export interface PerkInventoryResult {
+  balances?: Record<string, number>;
   error?: string;
 }
 
@@ -268,6 +308,10 @@ export class ChallengeAiClient {
     throw lastError!;
   }
 
+  hasAction(name: ChallengeActionName): boolean {
+    return Boolean(this.actions[name]);
+  }
+
   getActionId(name: ChallengeActionName): string {
     const id = this.actions[name];
     if (!id) {
@@ -279,6 +323,9 @@ export class ChallengeAiClient {
   }
 
   async getLadder(playerAddress: Address): Promise<LadderResult> {
+    if (!this.hasAction("getArenaLadder")) {
+      return { remainingToday: undefined };
+    }
     return this.call<LadderResult>("getArenaLadder", [playerAddress]);
   }
 
@@ -294,10 +341,56 @@ export class ChallengeAiClient {
     playerAddress: Address,
     txHash: string,
   ): Promise<PurchaseRefillResult> {
+    if (!this.hasAction("purchaseArenaRefill")) {
+      return {
+        ok: false,
+        error: "purchaseArenaRefill action not available on GameArena",
+      };
+    }
     return this.call<PurchaseRefillResult>("purchaseArenaRefill", [
       playerAddress,
       txHash,
     ]);
+  }
+
+  async buyPerkGasless(
+    playerAddress: Address,
+    sig: BuyPerkGaslessSig,
+  ): Promise<BuyPerkGaslessResult> {
+    if (!this.hasAction("buyPerkGasless")) {
+      return { ok: false, error: "buyPerkGasless action not available on GameArena" };
+    }
+    return this.call<BuyPerkGaslessResult>("buyPerkGasless", [
+      playerAddress,
+      sig,
+    ]);
+  }
+
+  async grantPerk(
+    playerAddress: Address,
+    txHash: string,
+  ): Promise<GrantPerkResult> {
+    if (!this.hasAction("grantPerk")) {
+      return { ok: false, error: "grantPerk action not available on GameArena" };
+    }
+    return this.call<GrantPerkResult>("grantPerk", [playerAddress, txHash]);
+  }
+
+  async getPerkInventory(
+    playerAddress: Address,
+  ): Promise<PerkInventoryResult> {
+    if (!this.hasAction("getPerkInventory")) {
+      return { balances: {} };
+    }
+    return this.call<PerkInventoryResult>("getPerkInventory", [playerAddress]);
+  }
+
+  supportsPerkRefill(): boolean {
+    return this.hasAction("buyPerkGasless") && this.hasAction("grantPerk");
+  }
+
+  supportsLegacyRefill(): boolean {
+    return this.hasAction("purchaseArenaRefill");
   }
 
   private async call<T>(action: ChallengeActionName, body: unknown[]): Promise<T> {
@@ -389,7 +482,11 @@ async function discoverActions(
         ACTION_RE.lastIndex = 0;
         while ((match = ACTION_RE.exec(js)) !== null) {
           const [, hash, name] = match;
-          if (CHALLENGE_ACTIONS.includes(name as ChallengeActionName)) {
+          const known = [
+            ...REQUIRED_ACTIONS,
+            ...OPTIONAL_ACTIONS,
+          ] as string[];
+          if (known.includes(name)) {
             actions[name as ChallengeActionName] = hash;
           }
         }

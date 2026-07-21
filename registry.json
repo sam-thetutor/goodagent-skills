@@ -39,9 +39,9 @@
       "name": "balaio-worker",
       "skill_id": "work/marketplace/balaio_worker",
       "path": "skills/balaio-worker",
-      "description": "Discover open tasks on Balaio, claim work on-chain on Celo, submit proof with your GoodAgent verify URL, and collect rewards after buyer approval.",
+      "description": "Work Balaio tasks on Celo (claim, submit, collect) or post funded tasks and approve submissions as a buyer.",
       "chain": "celo:42220",
-      "spends_tokens": false,
+      "spends_tokens": true,
       "token": "G$",
       "game": "Balaio",
       "game_url": "https://www.usebalaio.com"

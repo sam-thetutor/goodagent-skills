@@ -39,16 +39,23 @@ function getDispatcher(): ProxyAgent | undefined {
   return dispatcher;
 }
 
-/** GameArena-only fetch — routes through GAMEARENA_PROXY when set. */
+/** GameArena-only fetch — routes through GAMEARENA_PROXY when set; falls back to direct on proxy failure. */
 export async function gamearenaFetch(
   url: string,
   init?: RequestInit,
 ): Promise<Response> {
   const dispatcher = getDispatcher();
   if (!dispatcher) return fetch(url, init);
-  const res = await undiciFetch(url, {
-    ...(init as UndiciRequestInit),
-    dispatcher,
-  });
-  return res as unknown as Response;
+  try {
+    const res = await undiciFetch(url, {
+      ...(init as UndiciRequestInit),
+      dispatcher,
+    });
+    return res as unknown as Response;
+  } catch (error) {
+    console.warn(
+      `[proxy] GameArena request failed via proxy (${(error as Error).message}) — retrying direct`,
+    );
+    return fetch(url, init);
+  }
 }

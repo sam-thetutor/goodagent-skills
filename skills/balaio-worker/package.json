@@ -1,16 +1,16 @@
 {
-  "name": "@goodagent/skill-gamearena-player",
-  "version": "1.5.0",
-  "description": "GoodAgent skill: play RPS vs MARKOV on GameArena (off-chain challenge-ai or on-chain G$ wagers)",
+  "name": "@goodagent/skill-balaio-worker",
+  "version": "2.0.0",
+  "description": "GoodAgent skill: discover Balaio tasks, claim work, submit proof, collect rewards — or post funded tasks and approve submissions",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "preflight": "tsx scripts/preflight.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "dotenv": "^16.5.0",
-    "undici": "^7.10.0",
     "viem": "^2.31.3"
   },
   "devDependencies": {
