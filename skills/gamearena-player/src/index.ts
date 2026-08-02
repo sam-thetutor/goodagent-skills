@@ -10,12 +10,18 @@ import { Bankroll, type ConfigPlayMode, type PlayMode } from "./bankroll.js";
 import {
   ChallengeAiClient,
   ChallengeAiStaleActionsError,
+  clearDiscoveryCache,
   isGameArenaBlockedError,
   type RefillOffer,
   type StartMatchResult,
 } from "./challenge-ai.js";
+import {
+  GameArenaAgentApiClient,
+  isAgentApiConfigured,
+  type OffchainPlayClient,
+} from "./agent-api.js";
 import { readGsBalance, buyMatchPackGasless, perkIdFromRefillOffer } from "./refill.js";
-import { installLogReporter, reportMatch, reportRefill } from "./reporter.js";
+import { installLogReporter, reportArenaMatchEnd, reportArenaMatchStart, reportLiveMatch, reportMatch, reportRefill } from "./reporter.js";
 import {
   createMarkovStrategy,
   GAME_NAMES,
@@ -77,6 +83,11 @@ const autoRefill = envFlag("AUTO_REFILL", true);
 const maxMatches = Number(process.env.MAX_MATCHES ?? 10);
 const intervalMs =
   Math.max(30, Number(process.env.MATCH_INTERVAL_SECONDS ?? 300)) * 1000;
+/** Pause between throwMove calls so GameArena SSE spectators can watch (~1s). */
+const roundPaceMs = Math.max(
+  0,
+  Number(process.env.ROUND_PACE_MS ?? 1000),
+);
 
 if (playMode === "offchain" && gameType !== 0) {
   console.error("Off-chain challenge-ai only supports GAME_TYPE=0 (Rock-Paper-Scissors)");
@@ -142,10 +153,21 @@ function startupJitterMs(): number {
 
 async function connectChallengeAi(): Promise<ChallengeAiClient> {
   let attempt = 0;
+  let staleAttempt = 0;
   while (true) {
     try {
       return await ChallengeAiClient.create(challengeAiUrl);
     } catch (error) {
+      if (error instanceof ChallengeAiStaleActionsError) {
+        clearDiscoveryCache();
+        staleAttempt += 1;
+        if (staleAttempt >= 3) throw error;
+        console.error(
+          `[discovery] ${(error as Error).message} — re-scanning bundles (${staleAttempt}/3)`,
+        );
+        await sleep(2000);
+        continue;
+      }
       if (!isGameArenaBlockedError(error)) throw error;
       attempt += 1;
       const delayMs = Math.min(
@@ -272,8 +294,24 @@ async function tryAutoRefill(
 }
 
 async function resolveOffchainStart(
-  client: ChallengeAiClient,
+  client: OffchainPlayClient,
 ): Promise<StartMatchResult | null> {
+  if (client instanceof GameArenaAgentApiClient) {
+    console.log("[start] Rock-Paper-Scissors vs MARKOV (agent API)…");
+    const started = await client.startMatch(playerAddress);
+    if (started.error || !started.matchId) {
+      console.log(
+        `[skip] could not start match: ${started.error ?? "unknown error"}`,
+      );
+      return null;
+    }
+    return started;
+  }
+
+  if (!(client instanceof ChallengeAiClient)) {
+    return null;
+  }
+
   for (let attempt = 0; attempt < 2; attempt++) {
     const ladder = await client.getLadder(playerAddress);
     if (
@@ -315,7 +353,7 @@ async function resolveOffchainStart(
 }
 
 async function playOffchainMatch(
-  client: ChallengeAiClient,
+  client: OffchainPlayClient,
 ): Promise<"played" | "skipped" | "exhausted"> {
   const gate = bankroll.canPlay(0);
   if (!gate.ok) {
@@ -326,15 +364,25 @@ async function playOffchainMatch(
   const started = await resolveOffchainStart(client);
   if (!started?.matchId) return "exhausted";
 
-  const { matchId, remainingToday, commitHash } = started;
+  const { matchId, remainingToday, commitHash, winsNeeded } = started;
   markovStrategy.beginMatch(matchId);
   console.log(
     `[start] match ${matchId} · commit ${commitHash?.slice(0, 10)}… · tickets left ${remainingToday ?? "?"} · strategy ${strategyName}`,
   );
 
+  reportArenaMatchStart(matchId);
+  reportLiveMatch({
+    matchId,
+    phase: "starting",
+    winsNeeded,
+    playerLabel: process.env.AGENT_DISPLAY_NAME?.trim() || "Agent",
+    score: { player: 0, ai: 0, ties: 0 },
+  });
+
   let finalOutcome: "won" | "lost" | "unresolved" = "unresolved";
   let lastAiMove: number | undefined;
 
+  try {
   while (true) {
     const { move, label } = markovStrategy.nextMove({
       gameType: 0,
@@ -359,6 +407,29 @@ async function playOffchainMatch(
         (round.markovLine ? ` — "${round.markovLine}"` : ""),
     );
 
+    reportLiveMatch({
+      matchId,
+      phase: round.final ? "ended" : "playing",
+      winsNeeded,
+      playerLabel: process.env.AGENT_DISPLAY_NAME?.trim() || "Agent",
+      round: round.round,
+      playerMove: round.playerMove,
+      aiMove: round.aiMove,
+      playerMoveLabel: label,
+      roundResult: round.result,
+      readLevel: round.readLevel,
+      suddenDeath: round.suddenDeath,
+      markovLine: round.markovLine,
+      score: round.score,
+      final: round.final
+        ? {
+            outcome: round.final.outcome,
+            totalRounds: round.final.totalRounds,
+            matchLine: round.final.matchLine,
+          }
+        : undefined,
+    });
+
     if (round.final) {
       const won = round.final.outcome === "player_won";
       finalOutcome = won ? "won" : "lost";
@@ -368,6 +439,13 @@ async function playOffchainMatch(
       );
       break;
     }
+
+    if (roundPaceMs > 0) {
+      await sleep(roundPaceMs);
+    }
+  }
+  } finally {
+    reportArenaMatchEnd(matchId);
   }
 
   recordMatch({
@@ -478,7 +556,7 @@ async function playOnchainMatch(arena: ArenaClient): Promise<"played" | "skipped
 }
 
 async function playAutoMatch(
-  client: ChallengeAiClient,
+  client: OffchainPlayClient,
   arena: ArenaClient,
 ): Promise<"played" | "skipped"> {
   const offchain = await playOffchainMatch(client);
@@ -507,19 +585,30 @@ async function main(): Promise<void> {
     console.log(
       `game=RPS tickets≤${matchCapLabel} autoRefill=${autoRefill} refillBudget=${dailyRefillCapGs}G$/day maxMatches=${maxMatches || "∞"}`,
     );
-    const client = await connectChallengeAi();
-    console.log(
-      `[discovery] server actions: start=${client.getActionId("startArenaMatch").slice(0, 8)}… throw=${client.getActionId("throwArenaMove").slice(0, 8)}…` +
-        (client.hasAction("buyPerkGasless")
-          ? ` buyGasless=${client.getActionId("buyPerkGasless").slice(0, 8)}…`
-          : "") +
-        (client.hasAction("grantPerk")
-          ? ` grant=${client.getActionId("grantPerk").slice(0, 8)}…`
-          : "") +
-        (client.hasAction("purchaseArenaRefill")
-          ? ` legacyRefill=${client.getActionId("purchaseArenaRefill").slice(0, 8)}…`
-          : " legacyRefill=unavailable"),
-    );
+
+    let client: OffchainPlayClient;
+    if (isAgentApiConfigured()) {
+      const agentClient = GameArenaAgentApiClient.fromEnv();
+      client = agentClient;
+      console.log(
+        `[agent-api] off-chain play via ${agentClient.baseUrl} (scoped x-agent-key)`,
+      );
+    } else {
+      const legacyClient = await connectChallengeAi();
+      client = legacyClient;
+      console.log(
+        `[discovery] server actions: start=${legacyClient.getActionId("startArenaMatch").slice(0, 8)}… throw=${legacyClient.getActionId("throwArenaMove").slice(0, 8)}…` +
+          (legacyClient.hasAction("buyPerkGasless")
+            ? ` buyGasless=${legacyClient.getActionId("buyPerkGasless").slice(0, 8)}…`
+            : "") +
+          (legacyClient.hasAction("grantPerk")
+            ? ` grant=${legacyClient.getActionId("grantPerk").slice(0, 8)}…`
+            : "") +
+          (legacyClient.hasAction("purchaseArenaRefill")
+            ? ` legacyRefill=${legacyClient.getActionId("purchaseArenaRefill").slice(0, 8)}…`
+            : " legacyRefill=unavailable"),
+      );
+    }
 
     const arena =
       playMode === "auto" ? new ArenaClient(privateKey!, rpcUrl) : null;
@@ -530,6 +619,7 @@ async function main(): Promise<void> {
     }
 
     let played = 0;
+    let staleActionRetries = 0;
     while (maxMatches === 0 || played < maxMatches) {
       try {
         const outcome =
@@ -541,8 +631,21 @@ async function main(): Promise<void> {
         console.log(`[bankroll] ${bankroll.summary}`);
       } catch (error) {
         if (error instanceof ChallengeAiStaleActionsError) {
-          console.error("[error]", error.message);
-          break;
+          if (!(client instanceof ChallengeAiClient)) {
+            console.error("[error]", (error as Error).message);
+            break;
+          }
+          staleActionRetries += 1;
+          if (staleActionRetries > 3) {
+            console.error("[error]", (error as Error).message);
+            break;
+          }
+          console.error(
+            `[discovery] ${(error as Error).message} — clearing cache and re-scanning (${staleActionRetries}/3)`,
+          );
+          clearDiscoveryCache();
+          client = await connectChallengeAi();
+          continue;
         }
         if (isGameArenaBlockedError(error)) {
           console.error(

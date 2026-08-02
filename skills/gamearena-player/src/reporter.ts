@@ -58,6 +58,55 @@ export function reportLog(message: string): void {
   });
 }
 
+export interface LiveMatchSnapshot {
+  matchId: string;
+  phase: "starting" | "playing" | "ended";
+  winsNeeded?: number;
+  playerLabel?: string;
+  round?: number;
+  playerMove?: number;
+  aiMove?: number;
+  playerMoveLabel?: string;
+  roundResult?: "win" | "loss" | "tie";
+  readLevel?: number;
+  suddenDeath?: boolean;
+  markovLine?: string;
+  score?: { player: number; ai: number; ties: number };
+  final?: {
+    outcome: "player_won" | "ai_won" | "tie";
+    totalRounds?: number;
+    matchLine?: string;
+  };
+}
+
+export function reportLiveMatch(snapshot: LiveMatchSnapshot): void {
+  postActivity({
+    type: "live_match",
+    ...snapshot,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export function reportLiveClear(): void {
+  postActivity({ type: "live_clear" });
+}
+
+export function reportArenaMatchStart(matchId: string): void {
+  postActivity({
+    type: "arena_match",
+    action: "start",
+    matchId,
+  });
+}
+
+export function reportArenaMatchEnd(matchId: string): void {
+  postActivity({
+    type: "arena_match",
+    action: "end",
+    matchId,
+  });
+}
+
 export function installLogReporter(): void {
   const cfg = hostReportConfig();
   if (!cfg) return;

@@ -393,6 +393,10 @@ export class ChallengeAiClient {
     return this.hasAction("purchaseArenaRefill");
   }
 
+  supportsRefill(): boolean {
+    return this.supportsPerkRefill() || this.supportsLegacyRefill();
+  }
+
   private async call<T>(action: ChallengeActionName, body: unknown[]): Promise<T> {
     const actionId = this.getActionId(action);
     const origin = originFromBase(this.baseUrl);
