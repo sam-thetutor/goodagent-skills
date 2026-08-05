@@ -23,7 +23,13 @@
       "description": "Telegram agent that reminds subscribers to claim daily G$ UBI. On-chain claim streaks and leaderboard, live UBI pool stats, and face-verification expiry warnings — all read straight from Celo. Bring your own bot token from @BotFather.",
       "chain": "celo:42220",
       "spends_tokens": false,
-      "token": "G$"
+      "token": "G$",
+      "listed": false,
+      "enabled": false,
+      "capabilities": {
+        "requiresTelegram": true,
+        "spendsTokens": false
+      }
     },
     {
       "name": "playchessify-player",
@@ -35,7 +41,17 @@
       "spends_tokens": false,
       "token": "CHESS",
       "game": "PlayChessify",
-      "game_url": "https://celo.playchessify.xyz"
+      "game_url": "https://celo.playchessify.xyz",
+      "listed": true,
+      "enabled": true,
+      "capabilities": {
+        "requiresPrivateKey": true,
+        "spendsTokens": false
+      },
+      "dashboard": {
+        "dashboardPanel": "playchessify",
+        "statsAdapter": "playchessify"
+      }
     },
     {
       "name": "actionorder-player",
