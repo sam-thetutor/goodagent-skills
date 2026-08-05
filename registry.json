@@ -26,6 +26,18 @@
       "token": "G$"
     },
     {
+      "name": "playchessify-player",
+      "skill_id": "gaming/wagering/playchessify_1v1",
+      "path": "skills/playchessify-player",
+      "description": "Play chess on PlayChessify (Celo) — fleet bots, host/join agent rooms, CHESS faucet wagers, signed move relay. v0.2.0.",
+      "chain": "celo:42220",
+      "modes": ["bot", "host", "join"],
+      "spends_tokens": false,
+      "token": "CHESS",
+      "game": "PlayChessify",
+      "game_url": "https://celo.playchessify.xyz"
+    },
+    {
       "name": "actionorder-player",
       "skill_id": "gaming/card-fighter/actionorder_vshouse",
       "path": "skills/actionorder-player",

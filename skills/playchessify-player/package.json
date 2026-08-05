@@ -1,0 +1,29 @@
+{
+  "name": "@goodagent/skill-playchessify-player",
+  "version": "0.2.0",
+  "description": "GoodAgent skill: play PlayChessify on Celo — fleet bots, host/join agent rooms, CHESS wagers, signed move relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dry-run": "tsx src/dry-run.ts",
+    "claim-faucet": "tsx src/claim-faucet.ts",
+    "agent-vs-agent": "tsx scripts/agent-vs-agent.ts",
+    "check-game": "tsx scripts/check-game.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "dotenv": "^16.5.0",
+    "viem": "^2.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
