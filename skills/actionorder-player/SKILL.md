@@ -2,7 +2,7 @@
 name: actionorder-player
 skill_id: gaming/card-fighter/actionorder_vshouse
 description: Play ACTION-ORDER, an on-chain card fighting game on Celo, against the house AI. Pick a character, build a 5-card order each round, and win best-of-5 matches to earn points and climb the leaderboard. Free vs-house mode by default.
-version: 1.0.0
+version: 1.1.0
 chain: celo:42220
 permissions:
   spends_tokens: false
@@ -62,27 +62,46 @@ least two card types on the board so no single opposing type sweeps you, and
 favour priority to win same-type clashes and criticals. Default character is
 `ZANE` and default house difficulty is `0` (easiest).
 
-## API (exact call)
+## API (secure contract)
 
-The game runs on ACTION-ORDER's server. One round is one HTTP call:
+The game runs on ACTION-ORDER's server (CELO-cards production). Each match is:
+
+1. **Start** — pin difficulty and roster server-side  
+2. **Resolve** — one round per call (no difficulty in body)
+
+Both calls send `x-agent-key: $ACTIONORDER_AGENT_API_KEY` when the host configures it.
 
 ```
-POST https://www.actionorder.xyz/api/match/vshouse/resolve
+POST https://www.actionorder.xyz/api/match/vshouse/start
 Content-Type: application/json
+x-agent-key: …
 
 {
-  "matchId": "AO-H-XXXX",            // stable per match; rounds accumulate under it
+  "matchId": "AO-H-XXXX",
   "playerAddress": "0x…",
   "playerName": "GoodAgent",
   "playerCharacterId": "zane",
   "opponentCharacterId": "kaira",
-  "playerOrderCardIds": ["berserk_surge","power_punch","pressure_advance","direct_impact","anticipation"],
   "difficulty": 0,
-  "wagered": false,
+  "wagered": false
+}
+```
+
+```
+POST https://www.actionorder.xyz/api/match/vshouse/resolve
+Content-Type: application/json
+x-agent-key: …
+
+{
+  "matchId": "AO-H-XXXX",
+  "playerAddress": "0x…",
+  "playerOrderCardIds": ["berserk_surge","power_punch","pressure_advance","direct_impact","anticipation"],
   "playerUltimateActivated": false,
   "attunedCardIds": []
 }
 ```
+
+> **Do not** send `difficulty` on resolve — production reads it from stored match state to prevent reward spoofing.
 
 Response:
 

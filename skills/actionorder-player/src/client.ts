@@ -4,23 +4,38 @@
  * our locked order and the server returns the house AI's order, the knock
  * totals, and the running round score for the match id.
  *
- * NOTE: this is an unofficial endpoint reverse-engineered from the live client.
- * It may change without notice. The default mode is free (no wager); wagered
- * play settles through ACTION-ORDER's own escrow and is out of scope here.
+ * Security contract (CELO-cards / production):
+ * - POST /api/match/vshouse/start pins difficulty server-side
+ * - POST /api/match/vshouse/resolve never trusts difficulty from the client
+ * - Both routes require x-agent-key when ACTIONORDER_AGENT_API_KEY is set
  */
 
-export interface ResolveRequest {
+export interface StartMatchRequest {
   matchId: string;
   playerAddress: string;
   playerName: string;
   playerCharacterId: string;
   opponentCharacterId: string;
-  playerOrderCardIds: string[];
-  /** 0 = easiest house AI. */
+  /** 0 = easiest house AI — sent once at match start only. */
   difficulty: number;
   wagered: boolean;
+}
+
+export interface ResolveRoundRequest {
+  matchId: string;
+  playerAddress: string;
+  playerOrderCardIds: string[];
   playerUltimateActivated: boolean;
   attunedCardIds: string[];
+}
+
+/** @deprecated Legacy combined shape — prefer start + resolveRound. */
+export interface ResolveRequest extends ResolveRoundRequest {
+  playerName: string;
+  playerCharacterId: string;
+  opponentCharacterId: string;
+  difficulty: number;
+  wagered: boolean;
 }
 
 export interface ResolveResponse {
@@ -39,15 +54,51 @@ export class ActionOrderClient {
   constructor(
     private baseUrl = "https://www.actionorder.xyz",
     private timeoutMs = 20_000,
+    private agentApiKey?: string,
   ) {}
 
-  async resolveRound(req: ResolveRequest): Promise<ResolveResponse> {
+  private headers(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const key = this.agentApiKey?.trim();
+    if (key) headers["x-agent-key"] = key;
+    return headers;
+  }
+
+  async startMatch(req: StartMatchRequest): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/match/vshouse/start`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(req),
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(`start failed (${res.status}): ${text.slice(0, 200)}`);
+      }
+      let json: { ok?: boolean; error?: string };
+      try {
+        json = JSON.parse(text) as { ok?: boolean; error?: string };
+      } catch {
+        throw new Error(`start returned non-JSON: ${text.slice(0, 200)}`);
+      }
+      if (!json.ok) {
+        throw new Error(`start rejected: ${json.error ?? text.slice(0, 200)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async resolveRound(req: ResolveRoundRequest): Promise<ResolveResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const res = await fetch(`${this.baseUrl}/api/match/vshouse/resolve`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: this.headers(),
         body: JSON.stringify(req),
         signal: controller.signal,
       });
@@ -81,11 +132,20 @@ export class ActionOrderClient {
     }
   }
 
-  /** How many players are currently online (used as a liveness check). */
   async online(): Promise<number> {
-    const res = await fetch(`${this.baseUrl}/api/online`);
-    if (!res.ok) return 0;
-    const data = (await res.json()) as { online?: number };
-    return data.online ?? 0;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/online`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) return 0;
+      const json = (await res.json()) as { online?: number };
+      return json.online ?? 0;
+    } catch {
+      return 0;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

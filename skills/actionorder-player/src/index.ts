@@ -34,8 +34,9 @@ const dailyMatchCap = Number(process.env.DAILY_MATCH_CAP ?? 50);
 const intervalMs =
   Math.max(3, Number(process.env.MATCH_INTERVAL_SECONDS ?? 10)) * 1000;
 const baseUrl = process.env.ACTIONORDER_URL ?? "https://www.actionorder.xyz";
+const agentApiKey = process.env.ACTIONORDER_AGENT_API_KEY?.trim();
 
-const client = new ActionOrderClient(baseUrl);
+const client = new ActionOrderClient(baseUrl, 20_000, agentApiKey);
 const stats = new Stats("state.json", dailyMatchCap);
 const character = pickCharacter(characterId, profile);
 
@@ -58,6 +59,16 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
     `[match ${matchId}] ${character.name} vs house (${getCharacter(opponentId).name}), difficulty ${difficulty}`,
   );
 
+  await client.startMatch({
+    matchId,
+    playerAddress: playerAddress as string,
+    playerName,
+    playerCharacterId: character.id,
+    opponentCharacterId: opponentId,
+    difficulty,
+    wagered: false,
+  });
+
   let roundsWon = 0;
   let roundsLost = 0;
   let pointsEarned = 0;
@@ -68,12 +79,7 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
     const res = await client.resolveRound({
       matchId,
       playerAddress: playerAddress as string,
-      playerName,
-      playerCharacterId: character.id,
-      opponentCharacterId: opponentId,
       playerOrderCardIds: order,
-      difficulty,
-      wagered: false,
       playerUltimateActivated: false,
       attunedCardIds: [],
     });

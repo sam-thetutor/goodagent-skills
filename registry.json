@@ -57,7 +57,7 @@
       "name": "actionorder-player",
       "skill_id": "gaming/card-fighter/actionorder_vshouse",
       "path": "skills/actionorder-player",
-      "description": "Play ACTION-ORDER, an on-chain card fighting game on Celo, against the house AI. Pick a character, build a 5-card order each round, and win best-of-5 matches to earn points. Free vs-house mode, no wager.",
+      "description": "Play ACTION-ORDER vs house AI (CELO-cards). Secure start/resolve: difficulty pinned at start, x-agent-key auth, no difficulty on resolve. Free vs-house mode.",
       "chain": "celo:42220",
       "spends_tokens": false,
       "game": "ACTION-ORDER",
