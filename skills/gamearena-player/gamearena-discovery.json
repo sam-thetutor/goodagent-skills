@@ -1,11 +1,15 @@
 {
   "baseUrl": "https://gamearenahq.xyz",
   "pageUrl": "https://gamearenahq.xyz/games/challenge-ai",
-  "discoveredAt": "2026-07-14T11:46:39.759Z",
+  "discoveredAt": "2026-07-27T00:30:00.000Z",
   "actions": {
-    "getArenaLadder": "601d101a6b5c71bef4c77565f8d1c9712de5ece7fe",
-    "startArenaMatch": "40bdbeec459ec9f01e406e1070de4e259b6f759617",
-    "throwArenaMove": "6042fb215c4f9ba20f37b8034d18b4dc44b706b8be",
-    "purchaseArenaRefill": "608a10cea88cbe2faeb3d5373e70b35f5b74b26ea2"
+    "startArenaMatch": "40ad6db1b208489c056ca4a9498fa88d3c79a84465",
+    "throwArenaMove": "60c32061e170478b141d011396a5ae24bfca527315",
+    "getArenaMatchReceipt": "400028a341fa4f83c5510de9df20a278c3703f66a2",
+    "grantPerk": "60a850eedc16e26f21fede1c8224fabf63d4e3e35a",
+    "buyPerkGasless": "60ac3b7c8e84b635345aef2ac6c9a9f6fc33e3eba0",
+    "getPerkInventory": "40b232f515096bf5028b5c97c9c04203e0c5635daa",
+    "consumePerkStock": "6030ad00a340164fc2f421ac4d8121c3782e2e29a8",
+    "getArenaLadder": "60c79d20d2f933af954836bf324916a14ab69f025f"
   }
 }
