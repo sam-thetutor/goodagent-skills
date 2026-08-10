@@ -24,8 +24,8 @@
       "chain": "celo:42220",
       "spends_tokens": false,
       "token": "G$",
-      "listed": false,
-      "enabled": false,
+      "listed": true,
+      "enabled": true,
       "capabilities": {
         "requiresTelegram": true,
         "spendsTokens": false
@@ -62,6 +62,18 @@
       "spends_tokens": false,
       "game": "ACTION-ORDER",
       "game_url": "https://www.actionorder.xyz"
+    },
+    {
+      "name": "proof-of-alpha-hunt",
+      "skill_id": "gaming/intelligence/proof_of_alpha_hunt",
+      "path": "skills/proof-of-alpha-hunt",
+      "description": "Proof of Alpha daily Alpha Hunt — find a whale wallet's best tx and submit for AI scoring. No token spend; Etherscan + PoA HTTP API.",
+      "chain": "celo:42220",
+      "spends_tokens": false,
+      "game": "Proof of Alpha",
+      "game_url": "https://proof-of-alpha-eosin.vercel.app",
+      "listed": true,
+      "enabled": true
     },
     {
       "name": "balaio-worker",
