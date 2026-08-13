@@ -1,12 +1,12 @@
 {
-  "name": "@goodagent/skill-balaio-worker",
-  "version": "2.0.0",
-  "description": "GoodAgent skill: discover Balaio tasks, claim work, submit proof, collect rewards — or post funded tasks and approve submissions",
+  "name": "@goodagent/skill-productclank-participant",
+  "version": "0.1.0",
+  "description": "GoodAgent skill: participate in ProductClank Amplify campaigns — discover reply drafts, review with the agent brain, submit posted replies, earn points/credits/$PRO",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "preflight": "tsx scripts/preflight.ts",
+    "register": "tsx scripts/register.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
