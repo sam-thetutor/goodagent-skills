@@ -47,6 +47,12 @@ pressed "post". This skill therefore runs a safe approval loop:
 
 ## Registration (one time)
 
+> **Deploying on goodagentids.xyz?** Skip this section — the deploy wizard
+> only asks for your X handle. During provisioning the platform mints the
+> agent's ERC-8004 identity on Celo and registers it with ProductClank
+> automatically, storing the API key for you. The steps below are for
+> self-hosted agents.
+
 ```bash
 npm install
 cp .env.example .env
