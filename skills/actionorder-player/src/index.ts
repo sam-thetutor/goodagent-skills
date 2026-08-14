@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { config as loadEnv } from "dotenv";
 import { ActionOrderClient } from "./client.js";
 import { Stats } from "./stats.js";
@@ -43,7 +43,9 @@ const character = pickCharacter(characterId, profile);
 const ROUND_CAP = 9; // best-of-5 needs 5; cap guards against a stuck match.
 
 function newMatchId(): string {
-  return `AO-H-${randomBytes(2).toString("hex").toUpperCase()}`;
+  // 122 bits of randomness — the id space is not enumerable and collisions
+  // are not a realistic concern (the old 16-bit id collided by ~300 matches).
+  return `AO-H-${randomUUID()}`;
 }
 
 async function playOneMatch(): Promise<"played" | "skipped"> {
@@ -59,27 +61,25 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
     `[match ${matchId}] ${character.name} vs house (${getCharacter(opponentId).name}), difficulty ${difficulty}`,
   );
 
-  await client.startMatch({
-    matchId,
-    playerAddress: playerAddress as string,
-    playerName,
-    playerCharacterId: character.id,
-    opponentCharacterId: opponentId,
-    difficulty,
-    wagered: false,
-  });
-
   let roundsWon = 0;
   let roundsLost = 0;
   let pointsEarned = 0;
   let over = false;
+  let bountyCapReached = false;
 
+  // The live resolve route initialises match state on the first call for a
+  // new matchId and pins the reward difficulty there — no separate start call.
   for (let round = 1; round <= ROUND_CAP && !over; round++) {
     const order = buildOrder(character, premiumOwned, round - 1, profile);
     const res = await client.resolveRound({
       matchId,
       playerAddress: playerAddress as string,
+      playerName,
+      playerCharacterId: character.id,
+      opponentCharacterId: opponentId,
       playerOrderCardIds: order,
+      difficulty,
+      wagered: false,
       playerUltimateActivated: false,
       attunedCardIds: [],
     });
@@ -88,6 +88,7 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
     roundsLost = res.opponentRoundsWon;
     pointsEarned = res.pointsEarned;
     over = res.isMatchOver;
+    bountyCapReached = res.bountyCapReached ?? false;
 
     console.log(
       `[match ${matchId}] round ${round}: ${res.roundWinner} ` +
@@ -97,8 +98,24 @@ async function playOneMatch(): Promise<"played" | "skipped"> {
 
   const won = roundsWon > roundsLost;
   console.log(
-    `[match ${matchId}] ${won ? "WON" : "lost"} ${roundsWon}-${roundsLost} · ${pointsEarned} pts`,
+    `[match ${matchId}] ${won ? "WON" : "lost"} ${roundsWon}-${roundsLost} · ${pointsEarned} pts` +
+      (bountyCapReached ? " (daily bounty cap reached — win not counted)" : ""),
   );
+  if (won && bountyCapReached) {
+    console.log(
+      "[cap] daily bounty allowance spent — stopping so matches aren't wasted",
+    );
+    stats.record({
+      matchId,
+      character: character.id,
+      result: "won",
+      roundsWon,
+      roundsLost,
+      pointsEarned,
+      at: new Date().toISOString(),
+    });
+    return "skipped";
+  }
   stats.record({
     matchId,
     character: character.id,
