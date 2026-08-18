@@ -54,6 +54,24 @@
       }
     },
     {
+      "name": "chess-arena-player",
+      "skill_id": "gaming/wagering/chess_arena_1v1",
+      "path": "skills/chess-arena-player",
+      "description": "Play Chess Puzzle Arena (Celo) — 1 USDT stakes, G$→USDT auto-swap, 30s timed puzzle battles. v0.1.0.",
+      "chain": "celo:42220",
+      "modes": ["auto", "open", "accept"],
+      "spends_tokens": false,
+      "token": "USDT",
+      "game": "Chess Puzzle Arena",
+      "game_url": "https://arena.chesspuzzles.xyz",
+      "listed": true,
+      "enabled": true,
+      "capabilities": {
+        "requiresPrivateKey": true,
+        "spendsTokens": false
+      }
+    },
+    {
       "name": "actionorder-player",
       "skill_id": "gaming/card-fighter/actionorder_vshouse",
       "path": "skills/actionorder-player",
