@@ -16,9 +16,11 @@ console.log(
   `USDT buffer ${Number(config.usdtStakeBuffer) / 1e6} · G$ reserve ${Number(config.minGsReserve) / 1e18}`,
 );
 if (config.solverCmd) {
-  console.log(`solver ${config.solverCmd}`);
+  console.log(
+    `solver ${config.solverEngine} (${config.solverCmd}) · ${config.solverMovetimeMs}ms/puzzle`,
+  );
 } else {
-  console.log("solver mate-in-one (chess.js) + a1a2 fallback — set SOLVER_CMD for Stockfish");
+  console.log("solver basic — mate-in-one (chess.js) only");
 }
 
 let played = 0;

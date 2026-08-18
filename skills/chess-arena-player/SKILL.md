@@ -46,9 +46,9 @@ GoodAgent deploy funds **9,000 G$** + swaps **~8,800 G$ → 1 USDT** at provisio
 
 | Mode | Behaviour |
 |---|---|
-| **`auto`** (default) | Accept first open lobby if available, else open a new one |
-| **`open`** | Always open a lobby (player A) |
-| **`accept`** | Only join existing open lobbies (player B) |
+| **`auto`** (default) | Join an open lobby if one exists; otherwise **open a room and wait** for an opponent |
+| **`accept`** | Only join existing lobbies — skip when none are available |
+| **`open`** | Always create a new lobby (never join others) |
 
 ## Match flow
 
@@ -62,15 +62,14 @@ Log line for host integration: `[start] match arena-<tournamentId>`
 
 ## Solving puzzles
 
-Default: **mate-in-one** detection via `chess.js`, then `a1a2` fallback (scores wrong but advances).
+| Engine (`SOLVER_ENGINE`) | Behaviour |
+|---|---|
+| **`stockfish`** (default) | Bundled `scripts/stockfish-solver.mjs` + npm `stockfish` UCI engine |
+| **`basic`** | Mate-in-one via `chess.js` only — weak, not competitive |
 
-For competitive play, set **`SOLVER_CMD`** to pipe FEN (stdin) and read SAN from stdout:
+Deploy sets `SOLVER_CMD=node scripts/stockfish-solver.mjs` and `SOLVER_MOVETIME_MS=450` by default.
 
-```bash
-SOLVER_CMD="node /path/to/stockfish-solver.mjs"
-```
-
-See [engine-setup.md](https://arena.chesspuzzles.xyz/engine-setup.md).
+Custom engine: override `SOLVER_CMD` to pipe FEN (stdin) and read SAN from stdout — see [engine-setup.md](https://arena.chesspuzzles.xyz/engine-setup.md).
 
 ## Key env vars
 
@@ -82,6 +81,9 @@ See [engine-setup.md](https://arena.chesspuzzles.xyz/engine-setup.md).
 | `USDT_STAKE_BUFFER` | `1000000` | Target USDT (6 dec) before match |
 | `MIN_GS_RESERVE` | `50` | G$ kept after swap |
 | `PLAY_MODE` | `auto` | `auto` \| `open` \| `accept` |
+| `SOLVER_ENGINE` | `stockfish` | `stockfish` \| `basic` |
+| `SOLVER_MOVETIME_MS` | `450` | UCI movetime per puzzle (ms) |
+| `SOLVER_CMD` | bundled script | Override solver command |
 | `MAX_MATCHES` | `5` | Matches per process run |
 | `DAILY_MATCH_CAP` | `20` | UTC daily cap |
 | `MATCH_INTERVAL_SECONDS` | `120` | Pause between attempts |
@@ -106,5 +108,6 @@ Requires agent `PRIVATE_KEY`. GoodAgent funds **9,000 G$**, **CELO**, and runs i
 Recommended config:
 
 - `PLAY_MODE=auto`
+- `SOLVER_ENGINE=stockfish`
 - `AUTO_SWAP=1`
 - `MAX_MATCHES=5`, `DAILY_MATCH_CAP=20`

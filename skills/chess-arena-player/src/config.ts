@@ -1,8 +1,11 @@
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { LocalAccount } from "viem/accounts";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type PlayMode = "auto" | "open" | "accept";
+export type SolverEngine = "stockfish" | "basic";
 
 export interface SkillConfig {
   account: LocalAccount;
@@ -16,10 +19,27 @@ export interface SkillConfig {
   minGsReserve: bigint;
   usdtStakeBuffer: bigint;
   playMode: PlayMode;
+  solverEngine: SolverEngine;
   solverCmd?: string;
+  solverMovetimeMs: number;
   maxMatches: number;
   dailyMatchCap: number;
   intervalMs: number;
+}
+
+const SKILL_ROOT = dirname(fileURLToPath(import.meta.url));
+
+function bundledStockfishCmd(): string {
+  return `node ${join(SKILL_ROOT, "..", "scripts", "stockfish-solver.mjs")}`;
+}
+
+function resolveSolverCmd(
+  solverEngine: SolverEngine,
+  solverCmdRaw: string | undefined,
+): string | undefined {
+  if (solverEngine === "basic") return undefined;
+  if (solverCmdRaw) return solverCmdRaw;
+  return bundledStockfishCmd();
 }
 
 function parseBool(raw: string | undefined, fallback: boolean): boolean {
@@ -51,7 +71,19 @@ export function loadConfig(): SkillConfig {
   const playMode: PlayMode =
     playModeRaw === "open" || playModeRaw === "accept" ? playModeRaw : "auto";
 
-  const solverCmd = process.env.SOLVER_CMD?.trim() || undefined;
+  const solverEngineRaw = (process.env.SOLVER_ENGINE ?? "stockfish")
+    .trim()
+    .toLowerCase();
+  const solverEngine: SolverEngine =
+    solverEngineRaw === "basic" ? "basic" : "stockfish";
+  const solverCmd = resolveSolverCmd(
+    solverEngine,
+    process.env.SOLVER_CMD?.trim() || undefined,
+  );
+  const solverMovetimeMs = Math.max(
+    100,
+    Math.min(3000, Number(process.env.SOLVER_MOVETIME_MS ?? 450) || 450),
+  );
 
   return {
     account,
@@ -67,7 +99,9 @@ export function loadConfig(): SkillConfig {
     minGsReserve: parseBigInt(process.env.MIN_GS_RESERVE, 50n * 10n ** 18n),
     usdtStakeBuffer: parseBigInt(process.env.USDT_STAKE_BUFFER, 1_000_000n),
     playMode,
+    solverEngine,
     solverCmd,
+    solverMovetimeMs,
     maxMatches: Math.max(0, Number(process.env.MAX_MATCHES ?? 5)),
     dailyMatchCap: Math.max(0, Number(process.env.DAILY_MATCH_CAP ?? 20)),
     intervalMs: Math.max(10, Number(process.env.MATCH_INTERVAL_SECONDS ?? 120)) * 1000,

@@ -57,7 +57,7 @@
       "name": "chess-arena-player",
       "skill_id": "gaming/wagering/chess_arena_1v1",
       "path": "skills/chess-arena-player",
-      "description": "Play Chess Puzzle Arena (Celo) — 1 USDT stakes, G$→USDT auto-swap, 30s timed puzzle battles. v0.1.0.",
+      "description": "Play Chess Puzzle Arena (Celo) — 1 USDT stakes, G$→USDT auto-swap via Uniswap, Stockfish puzzle solver, 30s timed battles. v0.2.0.",
       "chain": "celo:42220",
       "modes": ["auto", "open", "accept"],
       "spends_tokens": false,

@@ -1,22 +1,32 @@
 import {
   createPublicClient,
   createWalletClient,
+  encodeAbiParameters,
   formatUnits,
+  getAddress,
   http,
   maxUint256,
+  parseAbiParameters,
+  parseUnits,
   type Address,
+  type Hex,
+  type HttpTransport,
+  type PublicClient,
+  type WalletClient,
 } from "viem";
 import { celo } from "viem/chains";
 import type { LocalAccount } from "viem/accounts";
 import {
   ERC20_ABI,
   G_DOLLAR,
-  G_USDM_EXCHANGE_ID,
-  MENTO_BROKER,
-  MENTO_BROKER_ABI,
-  MENTO_PROVIDER,
-  UNISWAP_ROUTER,
-  UNISWAP_ROUTER_ABI,
+  GS_USDM_FEE,
+  PERMIT2,
+  PERMIT2_ABI,
+  UNISWAP_QUOTER,
+  UNISWAP_QUOTER_ABI,
+  UNISWAP_UNIVERSAL_ROUTER,
+  UNISWAP_UNIVERSAL_ROUTER_ABI,
+  UNISWAP_V3_SWAP_EXACT_IN_COMMAND,
   USDM,
   USDM_USDT_FEE,
   USDT,
@@ -24,6 +34,10 @@ import {
 
 const SLIPPAGE_BPS = 200n;
 const BPS = 10_000n;
+const PERMIT2_MAX_AMOUNT = 2n ** 160n - 1n;
+
+type CeloPublic = PublicClient<HttpTransport, typeof celo>;
+type CeloWallet = WalletClient<HttpTransport, typeof celo, LocalAccount>;
 
 function applySlippageUp(amount: bigint): bigint {
   return (amount * (BPS + SLIPPAGE_BPS) + BPS - 1n) / BPS;
@@ -33,7 +47,121 @@ function applySlippageDown(amount: bigint): bigint {
   return (amount * (BPS - SLIPPAGE_BPS)) / BPS;
 }
 
-/** Swap G$ → USDm (MentoBroker) → USDT (Uniswap V3) per GoodAgent funding path. */
+function encodeUniswapPath(tokens: Address[], fees: number[]): Hex {
+  let encoded = tokens[0].slice(2).toLowerCase();
+  for (let i = 0; i < fees.length; i++) {
+    encoded += fees[i]!.toString(16).padStart(6, "0");
+    encoded += tokens[i + 1]!.slice(2).toLowerCase();
+  }
+  return `0x${encoded}` as Hex;
+}
+
+function tokenInFromPath(path: Hex): Address {
+  return getAddress(`0x${path.slice(2, 42)}`);
+}
+
+async function quoteGsForUsdm(pub: CeloPublic, usdmNeeded: bigint): Promise<bigint> {
+  if (usdmNeeded <= 0n) return 0n;
+  let lo = 1n;
+  let hi = parseUnits("50000", 18);
+  while (lo < hi) {
+    const mid = (lo + hi) / 2n;
+    const [usdmOut] = await pub.readContract({
+      address: UNISWAP_QUOTER,
+      abi: UNISWAP_QUOTER_ABI,
+      functionName: "quoteExactInputSingle",
+      args: [
+        {
+          tokenIn: G_DOLLAR,
+          tokenOut: USDM,
+          amountIn: mid,
+          fee: GS_USDM_FEE,
+          sqrtPriceLimitX96: 0n,
+        },
+      ],
+    });
+    if (usdmOut >= usdmNeeded) hi = mid;
+    else lo = mid + 1n;
+  }
+  return lo;
+}
+
+async function ensurePermit2Allowance(
+  wallet: CeloWallet,
+  pub: CeloPublic,
+  token: Address,
+  owner: Address,
+  amount: bigint,
+): Promise<void> {
+  const erc20Allowance = await pub.readContract({
+    address: token,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: [owner, PERMIT2],
+  });
+  if (erc20Allowance < amount) {
+    const hash = await wallet.writeContract({
+      account: wallet.account,
+      chain: celo,
+      address: token,
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [PERMIT2, maxUint256],
+    });
+    await pub.waitForTransactionReceipt({ hash });
+  }
+
+  const [permit2Amount] = await pub.readContract({
+    address: PERMIT2,
+    abi: PERMIT2_ABI,
+    functionName: "allowance",
+    args: [owner, token, UNISWAP_UNIVERSAL_ROUTER],
+  });
+  if (permit2Amount < amount) {
+    const expiration = Math.floor(Date.now() / 1000) + 86400 * 30;
+    const hash = await wallet.writeContract({
+      account: wallet.account,
+      chain: celo,
+      address: PERMIT2,
+      abi: PERMIT2_ABI,
+      functionName: "approve",
+      args: [token, UNISWAP_UNIVERSAL_ROUTER, PERMIT2_MAX_AMOUNT, expiration],
+    });
+    await pub.waitForTransactionReceipt({ hash });
+  }
+}
+
+async function universalV3SwapExactIn(
+  wallet: CeloWallet,
+  pub: CeloPublic,
+  owner: Address,
+  path: Hex,
+  amountIn: bigint,
+  amountOutMinimum: bigint,
+): Promise<void> {
+  await ensurePermit2Allowance(wallet, pub, tokenInFromPath(path), owner, amountIn);
+  const swapInput = encodeAbiParameters(
+    parseAbiParameters(
+      "address recipient, uint256 amountIn, uint256 amountOutMinimum, bytes path, bool payerIsUser",
+    ),
+    [owner, amountIn, amountOutMinimum, path, true],
+  );
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+  const hash = await wallet.writeContract({
+    account: wallet.account,
+    chain: celo,
+    address: UNISWAP_UNIVERSAL_ROUTER,
+    abi: UNISWAP_UNIVERSAL_ROUTER_ABI,
+    functionName: "execute",
+    args: [UNISWAP_V3_SWAP_EXACT_IN_COMMAND, [swapInput], deadline],
+  });
+  const receipt = await pub.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`Uniswap swap reverted: ${hash}`);
+  }
+}
+
+/** Swap G$ → USDm → USDT via Uniswap Universal Router (G$ requires Permit2). */
 export async function ensureUsdtFromGs(
   account: LocalAccount,
   rpcUrl: string,
@@ -41,11 +169,11 @@ export async function ensureUsdtFromGs(
   minGsReserve: bigint,
 ): Promise<boolean> {
   const transport = http(rpcUrl);
-  const pub = createPublicClient({ chain: celo, transport });
-  const wallet = createWalletClient({ account, chain: celo, transport });
+  const pub = createPublicClient({ chain: celo, transport }) as CeloPublic;
+  const wallet = createWalletClient({ account, chain: celo, transport }) as CeloWallet;
   const owner = account.address;
 
-  const usdtBal = await pub.readContract({
+  let usdtBal = await pub.readContract({
     address: USDT,
     abi: ERC20_ABI,
     functionName: "balanceOf",
@@ -53,15 +181,37 @@ export async function ensureUsdtFromGs(
   });
   if (usdtBal >= targetUsdt) return false;
 
+  let usdmBal = await pub.readContract({
+    address: USDM,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [owner],
+  });
+  if (usdmBal > 0n) {
+    await universalV3SwapExactIn(
+      wallet,
+      pub,
+      owner,
+      encodeUniswapPath([USDM, USDT], [USDM_USDT_FEE]),
+      usdmBal,
+      0n,
+    );
+    usdtBal = await pub.readContract({
+      address: USDT,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [owner],
+    });
+    if (usdtBal >= targetUsdt) {
+      console.log(`[swap] USDT balance now ${formatUnits(usdtBal, 6)}`);
+      return true;
+    }
+  }
+
   const shortfall = targetUsdt - usdtBal;
   const usdmNeeded = applySlippageUp(shortfall * 10n ** 12n);
-  const gsRequired = await pub.readContract({
-    address: MENTO_BROKER,
-    abi: MENTO_BROKER_ABI,
-    functionName: "getAmountIn",
-    args: [MENTO_PROVIDER, G_USDM_EXCHANGE_ID, G_DOLLAR, USDM, usdmNeeded],
-  });
-  const gsMax = applySlippageUp(gsRequired);
+  const gsRequired = await quoteGsForUsdm(pub, usdmNeeded);
+  const gsIn = applySlippageUp(gsRequired);
 
   const gsBal = await pub.readContract({
     address: G_DOLLAR,
@@ -70,100 +220,42 @@ export async function ensureUsdtFromGs(
     args: [owner],
   });
   const spendable = gsBal > minGsReserve ? gsBal - minGsReserve : 0n;
-  if (spendable < gsMax) {
+  if (spendable < gsIn) {
     throw new Error(
-      `Insufficient G$ for USDT swap: need ~${formatUnits(gsMax, 18)} G$, ` +
+      `Insufficient G$ for USDT swap: need ~${formatUnits(gsIn, 18)} G$, ` +
         `have ${formatUnits(spendable, 18)} spendable`,
     );
   }
 
   console.log(
-    `[swap] G$ → USDT target ${formatUnits(targetUsdt, 6)} (~${formatUnits(gsMax, 18)} G$)`,
+    `[swap] G$ → USDT via Uniswap Universal Router target ${formatUnits(targetUsdt, 6)} (~${formatUnits(gsIn, 18)} G$)`,
   );
 
-  let gsAllowance = await pub.readContract({
-    address: G_DOLLAR,
-    abi: ERC20_ABI,
-    functionName: "allowance",
-    args: [owner, MENTO_BROKER],
-  });
-  if (gsAllowance < gsMax) {
-    const hash = await wallet.writeContract({
-      account,
-      chain: celo,
-      address: G_DOLLAR,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [MENTO_BROKER, maxUint256],
-    });
-    await pub.waitForTransactionReceipt({ hash });
-  }
+  await universalV3SwapExactIn(
+    wallet,
+    pub,
+    owner,
+    encodeUniswapPath([G_DOLLAR, USDM], [GS_USDM_FEE]),
+    gsIn,
+    applySlippageDown(usdmNeeded),
+  );
 
-  const usdmBefore = await pub.readContract({
+  usdmBal = await pub.readContract({
     address: USDM,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [owner],
   });
+  if (usdmBal <= 0n) throw new Error("Uniswap G$ → USDm swap produced no USDm");
 
-  const mentoHash = await wallet.writeContract({
-    account,
-    chain: celo,
-    address: MENTO_BROKER,
-    abi: MENTO_BROKER_ABI,
-    functionName: "swapOut",
-    args: [MENTO_PROVIDER, G_USDM_EXCHANGE_ID, G_DOLLAR, USDM, usdmNeeded, gsMax],
-  });
-  await pub.waitForTransactionReceipt({ hash: mentoHash });
-
-  const usdmAfter = await pub.readContract({
-    address: USDM,
-    abi: ERC20_ABI,
-    functionName: "balanceOf",
-    args: [owner],
-  });
-  const usdmReceived = usdmAfter - usdmBefore;
-  if (usdmReceived <= 0n) throw new Error("Mento swap produced no USDm");
-
-  const usdmAllowance = await pub.readContract({
-    address: USDM,
-    abi: ERC20_ABI,
-    functionName: "allowance",
-    args: [owner, UNISWAP_ROUTER],
-  });
-  if (usdmAllowance < usdmReceived) {
-    const hash = await wallet.writeContract({
-      account,
-      chain: celo,
-      address: USDM,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [UNISWAP_ROUTER, maxUint256],
-    });
-    await pub.waitForTransactionReceipt({ hash });
-  }
-
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-  const swapHash = await wallet.writeContract({
-    account,
-    chain: celo,
-    address: UNISWAP_ROUTER,
-    abi: UNISWAP_ROUTER_ABI,
-    functionName: "exactInputSingle",
-    args: [
-      {
-        tokenIn: USDM,
-        tokenOut: USDT,
-        fee: USDM_USDT_FEE,
-        recipient: owner,
-        deadline,
-        amountIn: usdmReceived,
-        amountOutMinimum: applySlippageDown(shortfall),
-        sqrtPriceLimitX96: 0n,
-      },
-    ],
-  });
-  await pub.waitForTransactionReceipt({ hash: swapHash });
+  await universalV3SwapExactIn(
+    wallet,
+    pub,
+    owner,
+    encodeUniswapPath([USDM, USDT], [USDM_USDT_FEE]),
+    usdmBal,
+    0n,
+  );
 
   const finalUsdt = await pub.readContract({
     address: USDT,
