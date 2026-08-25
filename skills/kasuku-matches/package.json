@@ -1,0 +1,23 @@
+{
+  "name": "@goodagent/skill-kasuku-matches",
+  "version": "0.1.0",
+  "description": "GoodAgent skill: football fixture search, model-backed picks, and slip composition via the shared Kasuku catalog",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

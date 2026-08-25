@@ -109,6 +109,22 @@
         "requiresBrain": true,
         "spendsTokens": false
       }
+    },
+    {
+      "name": "kasuku-matches",
+      "skill_id": "sports/analysis/kasuku_matches",
+      "path": "skills/kasuku-matches",
+      "description": "Prompt your agent for football fixtures, model-backed picks, composed slips, and real bookmaker booking codes. Shared Kasuku catalog. Does not place stakes.",
+      "chain": "celo:42220",
+      "spends_tokens": false,
+      "game": "Kasuku",
+      "listed": true,
+      "enabled": true,
+      "capabilities": {
+        "requiresBrain": true,
+        "requiresTelegram": true,
+        "spendsTokens": false
+      }
     }
   ]
 }

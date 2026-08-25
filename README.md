@@ -11,6 +11,7 @@ Each skill teaches an agent how to use a real on-chain product — play a game, 
 | Skill | Game / Product | Type | Permissions |
 | --- | --- | --- | --- |
 | [`gamearena-player`](skills/gamearena-player/SKILL.md) | [GameArena](https://gamearenahq.xyz) — 1v1 wagers vs MARKOV | Gaming / wagering | Spends G$ (capped) |
+| [`kasuku-matches`](skills/kasuku-matches/SKILL.md) | Kasuku — football fixtures, picks, slips | Sports / analysis | No stake |
 
 The machine-readable index is [`registry.json`](registry.json).
 
